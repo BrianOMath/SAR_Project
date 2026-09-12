@@ -1,0 +1,45 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- virtual environments ---
+.venv/
+venv/
+env/
+
+# --- credentials (REQ: never commit CDSE login) ---
+.env
+*.netrc
+secrets.*
+
+# --- Sentinel-1 products (REQ-16: manifest only, never the data) ---
+# GRD scenes are 1-1.7 GB each. Commit product identifiers, not products.
+data/raw/
+*.SAFE/
+*.SAFE.zip
+S1[ABCD]_*.zip
+S1[ABCD]_*.SAFE/
+
+# --- SNAP intermediates and outputs ---
+*.dim
+*.data/
+data/processed/
+*.tif
+*.tiff
+!docs/**/*.png
+
+# --- recon and analysis outputs (regenerate, don't version) ---
+recon_out/
+outputs/
+figures/
+
+# --- editors / OS ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

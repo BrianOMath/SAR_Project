@@ -1,0 +1,5 @@
+# CDSE OData search envelope (WGS84 lon lat, counter-clockwise)
+POLYGON((-7.2155 52.6783,-6.6126 52.6783,-6.6126 53.0432,-7.2155 53.0432,-7.2155 52.6783))
+
+# Exact 40x40 km square (WGS84 lon lat, counter-clockwise)
+POLYGON((-7.215485 52.683712,-6.624038 52.678322,-6.612622 53.037724,-7.208974 53.043185,-7.215485 52.683712))

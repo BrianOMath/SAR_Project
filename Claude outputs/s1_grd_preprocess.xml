@@ -1,0 +1,144 @@
+<graph id="s1_grd_preprocess">
+  <version>1.0</version>
+
+  <!--
+    Sentinel-1 IW GRDH -> analysis-ready sigma0 over the Oak Park AOI.
+
+    Project : SAR drought 2026, phase 1
+    Config  : relative orbit 1, ASCENDING (locked by phase 0, plan section 5)
+    Implements REQ-05. Output is LINEAR POWER, not dB (REQ-06).
+
+    Run:
+      gpt s1_grd_preprocess.xml -Pinput=<product.zip> -Poutput=<out.dim>
+
+    STARTING POINT, NOT GOSPEL. Operator parameter names drift between SNAP
+    versions. Before trusting this, open it in SNAP Desktop (Tools > GraphBuilder
+    > Load) and check every node, and/or run:
+      gpt -h Calibration
+      gpt -h Terrain-Correction
+    to print the exact parameters your install accepts.
+  -->
+
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters>
+      <file>${input}</file>
+      <formatName>SENTINEL-1</formatName>
+    </parameters>
+  </node>
+
+  <!-- Precise orbits. continueOnFail is deliberately FALSE: a silently
+       restituted orbit is exactly the kind of quiet degradation the phase 0
+       nonconformances were about. If this fails, the POEORB is not published
+       yet - wait, or set it true and RECORD which scenes used restituted. -->
+  <node id="Apply-Orbit-File">
+    <operator>Apply-Orbit-File</operator>
+    <sources><sourceProduct refid="Read"/></sources>
+    <parameters>
+      <orbitType>Sentinel Precise (Auto Download)</orbitType>
+      <polyDegree>3</polyDegree>
+      <continueOnFail>false</continueOnFail>
+    </parameters>
+  </node>
+
+  <node id="ThermalNoiseRemoval">
+    <operator>ThermalNoiseRemoval</operator>
+    <sources><sourceProduct refid="Apply-Orbit-File"/></sources>
+    <parameters>
+      <selectedPolarisations>VV,VH</selectedPolarisations>
+      <removeThermalNoise>true</removeThermalNoise>
+      <outputNoise>false</outputNoise>
+      <reIntroduceThermalNoise>false</reIntroduceThermalNoise>
+    </parameters>
+  </node>
+
+  <!-- Modern IPF versions already trim GRD border noise, so this is often a
+       no-op on 2024-2026 products. Kept because it is cheap and harmless.
+       Phase 1 task: run once with and once without, compare the AOI edge, and
+       drop the node if it changes nothing. -->
+  <node id="Remove-GRD-Border-Noise">
+    <operator>Remove-GRD-Border-Noise</operator>
+    <sources><sourceProduct refid="ThermalNoiseRemoval"/></sources>
+    <parameters>
+      <selectedPolarisations>VV,VH</selectedPolarisations>
+      <borderLimit>500</borderLimit>
+      <trimThreshold>0.5</trimThreshold>
+    </parameters>
+  </node>
+
+  <!-- sigma0, LINEAR POWER. outputImageScaleInDb MUST stay false: averaging
+       in dB gives the wrong mean, and that error is invisible once made. -->
+  <node id="Calibration">
+    <operator>Calibration</operator>
+    <sources><sourceProduct refid="Remove-GRD-Border-Noise"/></sources>
+    <parameters>
+      <sourceBands/>
+      <auxFile>Product Auxiliary File</auxFile>
+      <selectedPolarisations>VV,VH</selectedPolarisations>
+      <outputSigmaBand>true</outputSigmaBand>
+      <outputBetaBand>false</outputBetaBand>
+      <outputGammaBand>false</outputGammaBand>
+      <outputImageInComplex>false</outputImageInComplex>
+      <outputImageScaleInDb>false</outputImageScaleInDb>
+    </parameters>
+  </node>
+
+  <!-- Subset BEFORE terrain correction: cuts runtime by roughly an order of
+       magnitude versus terrain-correcting the full 250 km swath.
+       Region is the AOI buffered by ~4 km, because TC resampling eats edge
+       pixels. Clip to the exact AOI after TC, in the analysis layer. -->
+  <node id="Subset">
+    <operator>Subset</operator>
+    <sources><sourceProduct refid="Calibration"/></sources>
+    <parameters>
+      <geoRegion>POLYGON ((-7.2605 52.6333, -6.5676 52.6333, -6.5676 53.0882, -7.2605 53.0882, -7.2605 52.6333))</geoRegion>
+      <subSamplingX>1</subSamplingX>
+      <subSamplingY>1</subSamplingY>
+      <copyMetadata>true</copyMetadata>
+    </parameters>
+  </node>
+
+  <!-- EPSG:2157 = IRENET95 / Irish Transverse Mercator, so the raster
+       co-registers with the National Land Cover Map without reprojecting
+       the vector data.
+       saveProjectedLocalIncidenceAngle answers the phase 0 open question:
+       the catalogue never exposed incidence angle, this writes it as a band. -->
+  <node id="Terrain-Correction">
+    <operator>Terrain-Correction</operator>
+    <sources><sourceProduct refid="Subset"/></sources>
+    <parameters>
+      <sourceBands/>
+      <demName>Copernicus 30m Global DEM</demName>
+      <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
+      <externalDEMApplyEGM>true</externalDEMApplyEGM>
+      <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>
+      <imgResamplingMethod>BILINEAR_INTERPOLATION</imgResamplingMethod>
+      <pixelSpacingInMeter>10.0</pixelSpacingInMeter>
+      <mapProjection>EPSG:2157</mapProjection>
+      <alignToStandardGrid>false</alignToStandardGrid>
+      <nodataValueAtSea>false</nodataValueAtSea>
+      <saveDEM>false</saveDEM>
+      <saveLatLon>false</saveLatLon>
+      <saveIncidenceAngleFromEllipsoid>false</saveIncidenceAngleFromEllipsoid>
+      <saveLocalIncidenceAngle>false</saveLocalIncidenceAngle>
+      <saveProjectedLocalIncidenceAngle>true</saveProjectedLocalIncidenceAngle>
+      <saveSelectedSourceBand>true</saveSelectedSourceBand>
+      <outputComplex>false</outputComplex>
+      <applyRadiometricNormalization>false</applyRadiometricNormalization>
+    </parameters>
+  </node>
+
+  <!-- BEAM-DIMAP for the phase 1 verification run: keeps band names and
+       opens straight back into SNAP. Switch to GeoTIFF in the batch runner,
+       and pin the band order with a test - band names are lost in GeoTIFF. -->
+  <node id="Write">
+    <operator>Write</operator>
+    <sources><sourceProduct refid="Terrain-Correction"/></sources>
+    <parameters>
+      <file>${output}</file>
+      <formatName>BEAM-DIMAP</formatName>
+    </parameters>
+  </node>
+
+</graph>

@@ -1,0 +1,3 @@
+& "C:\Program Files\esa-snap\bin\gpt.exe" s1_grd_preprocess_v2.xml `
+    -Pinput="C:\Users\bomat\Downloads\S1D_IW_GRDH_1SDV_20260717T181402_20260717T181427_003717_006A7D_80F9.SAFE.zip" `
+    -Poutput="C:\sar\proc\20260717_S1D.dim" -c 8G -q 4 -e
