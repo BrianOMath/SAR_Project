@@ -5,17 +5,18 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-
+ 
 # --- virtual environments ---
 .venv/
 venv/
 env/
-
+ 
 # --- credentials (REQ: never commit CDSE login) ---
 .env
 *.netrc
 secrets.*
-
+.cdse.xml
+ 
 # --- Sentinel-1 products (REQ-16: manifest only, never the data) ---
 # GRD scenes are 1-1.7 GB each. Commit product identifiers, not products.
 data/raw/
@@ -23,21 +24,46 @@ data/raw/
 *.SAFE.zip
 S1[ABCD]_*.zip
 S1[ABCD]_*.SAFE/
-
+ 
 # --- SNAP intermediates and outputs ---
 *.dim
 *.data/
 data/processed/
 *.tif
 *.tiff
-!docs/**/*.png
-
-# --- recon and analysis outputs (regenerate, don't version) ---
-recon_out/
+ 
+# The burned land-cover class raster is an ANALYSIS INPUT, not an
+# intermediate: a few MB of compressed uint8, and the stratification cannot be
+# reproduced without it if the EPA service changes. Re-included explicitly
+# because the *.tif rule above would otherwise swallow it.
+!data/landcover/nlcm_2018_classes.tif
+ 
+# --- the raw NLCM polygons: 1.55 GB, never commit ---
+# 197,134 polygons as uncompressed GeoJSON. Over GitHub's 100 MB file limit,
+# and permanent in history if it ever lands there. The class raster above plus
+# landcover_areas.csv are the provenance; fetch_landcover.py regenerates this
+# from the published service.
+data/landcover/*.geojson
+ 
+# --- recon catalogue: ignore the bulk, keep the manifest (REQ-16) ---
+# NOTE the /* form. A bare "recon_out/" excludes the DIRECTORY, so git never
+# descends into it and every negation below is dead. That exact mistake hid
+# scenes.csv from the first commit.
+recon_out/*
+!recon_out/scenes.csv
+!recon_out/acquisitions.csv
+!recon_out/orbits.csv
+ 
+# --- other generated output ---
 outputs/
-figures/
-
+ 
+# results/ is deliberately NOT ignored. The per-acquisition series, the test
+# results, the frozen drought window (REQ-20) and the figures are the
+# evidence the report rests on, and a reader cannot audit the analysis
+# without them. They total a few MB.
+ 
 # --- editors / OS ---
+.vs/
 .vscode/
 .idea/
 Thumbs.db
