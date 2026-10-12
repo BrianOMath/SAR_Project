@@ -1,8 +1,8 @@
 # SAR-Bog: Radar signatures of the 2026 Irish drought
 
 **Project plan — Tier A (minimum viable scope)**
-Brian Ó Mathúna · drafted 7 September 2026 · rev. 2, 8 September 2026
-**Phase 0 complete — data configuration locked (§5)**
+Brian Ó Mathúna · drafted 7 September 2026 · rev. 4, 26 September 2026
+**Phase 0 complete. Phase 1 complete: pipeline verified end to end, cross-calibration measured, REQ-09 closed (§5). Batch pending graph v3 reprocess (NCR-12).**
 
 Working title for the repo and report:
 *Sentinel-1 backscatter anomaly and post-drought recovery over the Carlow tillage belt, summer 2026*
@@ -73,7 +73,7 @@ That converts "guess at crop yields" — which would not survive scrutiny — in
 
 ---
 
-## 5. Phase 0 result — the data configuration (locked)
+## 5. Data configuration and measured performance (locked)
 
 Phase 0 ran on 7–8 September 2026 (`s1_recon.py`, CDSE OData catalogue): 499 products over the AOI for April–October of 2024, 2025 and 2026, merged to 415 acquisitions across five relative orbits.
 
@@ -121,6 +121,102 @@ The limitation flagged at rev. 1 stands and must be stated in the report: summer
 Orbit 1 carries 42 S1A, 28 S1C and 12 S1D acquisitions. Crucially they **interleave within seasons** rather than switching once at the S1A termination — S1A and S1C alternate on a 6-day offset through 2025 and into June 2026, and the 2026 drought window is 6 × S1C, 6 × S1D, 1 × S1A. This changes REQ-09 from a hard before/after comparison into a paired same-season one.
 
 The `min_edge_dist_km` per platform on the same orbit is not identical — S1A 48.8 km, S1D 60.5 km, S1C 16.9–60.5 km. Same track, slightly different footprints, so the platforms are not geometrically interchangeable and the cross-calibration is not optional.
+
+### First scene verified — 2026-07-17, S1D
+
+The SNAP GPT chain was built, corrected and run end-to-end on one mid-drought scene, then checked with `verify_scene.py`. All hard checks pass.
+
+| Measure | Value |
+|:-------------------------------------|:-----------------------------------------|
+| Output grid | 6536 × 6763 px, 10 m, EPSG:2157, north-up |
+| AOI coverage, all three bands | **100%** — the 4 km subset buffer survives the ~30° rotation |
+| Valid data, whole scene | σ° 53.6%, incidence angle 72.2% |
+| σ°VV over the AOI | median −13.13 dB (p05 −17.77, p95 −7.17) |
+| σ°VH over the AOI | median −18.98 dB (p05 −25.31, p95 −13.15) |
+| Cross-ratio VH − VV | **−5.85 dB** — textbook for a vegetated surface |
+| Negative VH after noise removal | 16,757 px, 0.10% |
+| Incidence angle at Oak Park | **37.67°** |
+| Incidence across the AOI | 33.36–43.81°, median 38.60°, p05–p95 spread **10.45°** |
+
+σ°VV at −13.1 dB is at the low end for Irish grassland. That is consistent with a dried surface, but it is a hypothesis until the 2025 baseline exists — do not report it as a drought signal on one scene.
+
+**The incidence spread is the finding that changes the analysis.** 10.45° across the AOI is roughly 1.6 dB of purely geometric backscatter variation. Between dates on orbit 1 it cancels exactly, so the anomaly is safe. Between land-cover classes it may not: the incidence gradient runs across-track while Carlow's tillage concentrates in the north–south Barrow valley, so grassland and arable may sit on systematically different parts of the gradient. That would look exactly like a land-cover difference. See REQ-19.
+
+### Measured throughput
+
+**48 seconds per scene** on the current desktop, subset-before-terrain-correction as designed. A faster machine is expected later, so treat these as an upper bound.
+
+| Set | Scenes | Processing | Volume | Download @100 Mbit |
+|:-----------------|-------:|-----------:|-------:|-------------------:|
+| 2025 + 2026 | 66 | 53 min | 117 GB | ~2.6 h |
+| plus 2024 | 82 | 66 min | 145 GB | ~3.2 h |
+
+Three consequences, all recorded because they change earlier decisions:
+
+- **Phase 2 is an evening, not three days.** Compute is no longer a constraint of any kind; download bandwidth is the only one, and it is domestic broadband rather than a CDSE limit.
+- **Add 2024 after all.** It costs 13 minutes of processing and 28 GB. The sampling objection stands — 16 acquisitions on a 12-day repeat is a weak baseline — so 2025 remains primary, but 2024 is now effectively free as a secondary check against interannual noise.
+- **Disk risk is gone.** With download → process → delete streaming at 48 s a scene, peak disk is a few raw products, under 10 GB rather than 145. See R3.
+
+### Cross-calibration pairs — the REQ-09 design
+
+The dataset contains two **consecutive-day platform pairs** on orbit 1. One day apart, same track, same geometry: surface conditions are as close to identical as nature allows, so any σ° difference over invariant targets is instrument, not ground.
+
+| Pair | Date | Platform | Product |
+|:-----|:-----|:---------|:--------|
+| A | 2026-06-28 | S1A | `S1A_IW_GRDH_1SDV_20260628T181435_..._065173_083734_B4D0` |
+| A | 2026-06-29 | S1C | `S1C_IW_GRDH_1SDV_20260629T181348_..._008324_010780_297B` |
+| B | 2026-04-23 | S1C | `S1C_IW_GRDH_1SDV_20260423T181347_..._007347_00EE71_7EB8` |
+| B | 2026-04-24 | S1D | `S1D_IW_GRDH_1SDV_20260424T181357_..._002492_0041C9_702F` |
+
+Pair A is S1A's **last pass on this orbit** before termination on 29 June — the cross-calibration is possible only on the final day it could have been. Four scenes, ~7 GB, four minutes of processing.
+
+Run this before the bulk batch, not after: if there is an inter-platform offset, it is far cheaper to find while the pipeline is still one command.
+
+### Cross-calibration measured — REQ-09 closed
+
+Both pairs processed 20 September 2026 and measured 26 September, over 16.0 M
+AOI pixels each. Offsets are AOI-mean linear σ⁰ ratios expressed in dB, with the
+negative tail retained (clipping is off by design, and discarding it would bias
+every mean upward). Both pairs share S1C, so the two measurements triangulate
+onto a common reference.
+
+| Pair | Comparison | σ⁰VV | σ⁰VH | cross-ratio (VH−VV) |
+|:-----|:-----------|-----:|-----:|--------------------:|
+| B | S1D − S1C, 23/24 Apr | −0.070 dB | −0.171 dB | −0.101 dB |
+| A | S1A − S1C, 28/29 Jun | +0.147 dB | +0.035 dB | −0.112 dB |
+
+**Geometry is not a factor.** Projected local incidence angle at Oak Park is
+37.70°, 37.70°, 37.62° and 37.66° for the four scenes, and 37.67° for the
+17 July S1D scene — a total spread of 0.08° across three platforms and four
+months. At ~0.1–0.15 dB per degree over vegetation that is ~0.01 dB, two orders
+of magnitude below the offsets above. Whatever those offsets are, they are not
+viewing geometry.
+
+**The largest single-channel offset is 0.171 dB** (σ⁰VH, pair B), against an
+expected drought signal of 1–3 dB in the cross-ratio. The platforms may be
+treated as one instrument.
+
+**The cross-ratio is better calibrated than either channel, and this is the
+substantive finding.** A gain error common to both polarisations cancels exactly
+in a ratio. The two pairs — different platform combinations, two months apart,
+different weather — give cross-ratio offsets of −0.101 dB and −0.112 dB, in
+agreement to **0.011 dB**. Two independent measurements agreeing that closely
+are not each other's coincidence. Since the drought metric is the cross-ratio,
+the platform term it inherits is ~0.1 dB, roughly 20× smaller than the 0.22 dB
+spread across individual channels. Carried explicitly in the analysis rather
+than corrected.
+
+**Caveat, stated for the record.** One day of real surface change sits inside
+every number here; rain between two overpasses moves σ⁰ by more than any
+plausible gain error. These are therefore working upper bounds on the platform
+term, not isolated instrument constants. The agreement between two pairs in
+different seasons is what makes them credible — a weather artefact would have
+to repeat itself in April and June to survive that test.
+
+*Angle stratification.* Offsets were binned in 2° incidence bands to confirm no
+geometric residual. All four channel/pair combinations are flat to ≤0.18 dB. The
+pair-A σ⁰VV bins rise across three bands then drop in the 40–42° tail — scatter
+in a thin, land-cover-skewed sample, not a slope. See NCR-13.
 
 ---
 
@@ -170,7 +266,8 @@ Written in the same style as the B-Raspi requirements set. Verification methods:
 | REQ-15 | The project shall produce a technical report structured as abstract, methods, results, discussion, with every figure reproducible from the committed code and data manifest. | D |
 | REQ-16 | Raw Sentinel-1 products shall not be committed to the repository; a manifest of product identifiers sufficient to re-download them shall be committed instead. | I |
 | REQ-17 | Any acquisition arriving as more than one GRD slice shall be mosaicked before subsetting. Any acquisition whose slices are non-contiguous shall be excluded from the time series and the exclusion recorded. | T |
-| REQ-18 | Coverage, gap and completeness metrics shall be computed per acquisition (slices merged) and on calendar dates, never per product or on elapsed timedeltas. | T |
+| REQ-18 | Coverage, gap and completeness metrics shall be computed per acquisition (slices merged) and on calendar dates, never per product or on elapsed timedeltas. Spatial checks shall test the AOI against the valid-data mask, not the raster bounding box. | T |
+| REQ-19 | The incidence-angle distribution shall be computed per land-cover class. If the grassland and arable distributions differ materially, class comparisons shall be made within matched incidence bands rather than pooled, and the decision recorded. | A |
 
 ---
 
@@ -260,7 +357,7 @@ A verification matrix in the B-Raspi format, one row per requirement, with the m
 
 Three verification items carry disproportionate weight and should be designed first:
 
-- **The inter-platform consistency check (REQ-09).** Select stable, temporally invariant targets inside the AOI — a large conifer block, an urban or industrial surface. Phase 0 showed the platforms *interleave* on orbit 1 rather than switching once, so compare S1A against S1C against S1D within short windows where surface conditions are effectively constant, rather than either side of the 29 June 2026 termination. A 2025 fortnight typically holds one S1A and one S1C pass six days apart; the 2026 drought window alternates S1C and S1D. Report the offset in dB per polarisation with a confidence interval. Within the sensor's specified radiometric stability: say so and move on. Outside it: document a nonconformance and carry the offset explicitly. Either outcome is a result — and this design is materially stronger than the before/after comparison assumed at rev. 1.
+- **The inter-platform consistency check (REQ-09).** Select stable, temporally invariant targets inside the AOI — a large conifer block, an urban or industrial surface. Phase 0 showed the platforms *interleave* on orbit 1 rather than switching once, so compare S1A against S1C against S1D within short windows where surface conditions are effectively constant, rather than either side of the 29 June 2026 termination. A 2025 fortnight typically holds one S1A and one S1C pass six days apart; the 2026 drought window alternates S1C and S1D. Report the offset in dB per polarisation with a confidence interval. Within the sensor's specified radiometric stability: say so and move on. Outside it: document a nonconformance and carry the offset explicitly. Either outcome is a result — and this design is materially stronger than the before/after comparison assumed at rev. 1. **Closed 26 September 2026** by the two consecutive-day pairs: largest single-channel offset 0.171 dB, cross-ratio offset −0.101 and −0.112 dB from two independent pairs. See §5.
 - **The linear-versus-dB averaging test (REQ-06).** A unit test that averages a known set of values both ways and asserts the pipeline uses the linear route. Cheap to write, and it pins a mistake that is invisible once made.
 - **The per-acquisition metric tests (REQ-18).** Two tests already in the Phase 0 suite that must carry forward: one asserting that two slices which individually clip the AOI union to full coverage, and one asserting gaps are counted on calendar dates rather than elapsed timedeltas. Both pin real defects — see §15.
 - **A synthetic-input end-to-end test.** Feed the analysis layer a fabricated time series with a known injected step and known noise, and assert the anomaly detection recovers the injected step. This is the same pattern as validating the B-Raspi SNR estimator against synthetic signals of known SNR — reuse the approach.
@@ -285,9 +382,9 @@ Part-time, evenings and weekends. Roughly four weeks to the report, plus a verif
 | Phase | Work |
 |:----------------------------------|:--------------------------------------------------------------------------------------------------|
 | **0. Reconnaissance** — ✅ *complete, 8 Sept 2026* | CDSE registered; `s1_recon.py` written, tested (52 tests, CI green) and run; 499 products catalogued across 2024–26; orbit 1 ascending selected; baseline year settled. Carried into phase 1: download the National Land Cover Map and the Met Éireann Oak Park series. See §5 and §15. |
-| **1. Pipeline** — *~5 days* | Build the SNAP graph in the GUI on one orbit-1 scene, verify it visually, export to XML. Wrap in a batch runner with download, process, delete-raw streaming. Containerise. Extend the existing pytest suite and CI to the processing layer. Measure the true incidence angle over the AOI from the product annotation and record it. |
-| **2. Bulk processing** — *~3 days, mostly waiting* | Run the full scene list. Monitor, handle failures, log. Largely unattended — this is where the headless design pays for itself. |
-| **3. Analysis** — *~6 days* | Extract per-class time series, compute the derived observables, test H1–H4, produce figures, run the inter-platform consistency check. |
+| **1. Pipeline** — *part done, 9–10 Sept* | Done: SNAP graph built, corrected and verified on one scene; `verify_scene.py` written; incidence angle measured (37.67° at Oak Park, S1D). Remaining: run the four cross-calibration scenes (§5), wrap the graph in a download → process → delete-raw batch runner, containerise, extend pytest and CI to the processing layer. |
+| **2. Bulk processing** — *one evening* | Run the full scene list: 82 scenes, ~66 min of compute, ~145 GB of download. Bandwidth-bound, not compute-bound. Monitor, handle failures, log. Unattended — this is where the headless design pays for itself. |
+| **3. Analysis** — *~6 days* | Extract per-class time series, compute the derived observables, test H1–H4, produce figures, run the inter-platform consistency check, and check the per-class incidence distributions (REQ-19). |
 | **4. Prediction** — *~1 day* | Derive the recovery index, write and commit `PREDICTION.md`. |
 | **5. Report and polish** — *~5 days* | Write the technical report, complete the verification matrix, tidy the repo and README. |
 | **6. Verification** *(later)* — *Q1–Q2 2027* | When Teagasc's fodder survey and the CSO crop figures publish, verify the prediction and commit an addendum — whether it was right or wrong. |
@@ -302,13 +399,14 @@ Part-time, evenings and weekends. Roughly four weeks to the report, plus a verif
 |:---------------------------------------------------------------|:---------------------------------------------------------------|
 | **R1** ✅ *closed* — Relative orbit numbering broken by the June 2026 reconfiguration | Did not materialise. Relative orbit 1 has continuous, fully-covering ascending acquisitions across 2024, 2025 and 2026. Settled empirically in phase 0. |
 | **R2** (M/M, reduced) — Inter-platform radiometric offset between S1A, S1C and S1D contaminates the anomaly | Reduced from M/H: the platforms interleave within seasons on orbit 1, so REQ-09 can compare them inside stable ≤14-day windows rather than across a season boundary. Carry the measured offset explicitly; nonconformance if uncorrectable. |
-| **R3** (L/M, reduced) — Disk exhaustion | Now sized from real data: 66 acquisitions for 2025+2026 at ~118 GB, or 82 and ~146 GB including 2024. Orbit 1 needs mosaicking on 1 acquisition in 82, so there is no slice-pair overhead. Streaming pattern: download, process, delete raw, keep only the ~50 MB AOI subsets. |
-| **R4** (M/M) — Single baseline year proves too noisy to support any claim | Baseline set to 2025 (§5). 2024 is available as a secondary check if phase 3 shows the noise floor is too high, at the cost of ~28 GB and a sparser 12-day cadence. Decide when the noise level is measurable, not now. |
+| **R3** ✅ *closed* — Disk exhaustion | Closed by measurement. At 48 s per scene the download → process → delete-raw stream never holds more than two or three raw products: peak disk under 10 GB against a 145 GB total. |
+| **R4** (L/M, reduced) — Single baseline year proves too noisy to support any claim | Baseline set to 2025 (§5). Measured throughput makes 2024 cost 13 min and 28 GB, so it is now included as a secondary check rather than held in reserve. Its 12-day cadence still makes it secondary, not a co-baseline. |
 | **R5** (H/M) — Land cover map is 2018 and crop rotation has since changed the arable parcels | Use the arable class as an indicative stratum, not a crop-type map. State the limitation. Grassland is far more stable in Ireland, so lean the headline result on grassland. |
 | **R6** (H/L) — Wet-canopy or rainfall-contaminated acquisitions distort individual dates | REQ-12 flagging; exclude or discuss, do not silently drop |
 | **R7** (M/L) — Drought signal is not separable from normal senescence over arable | This is H2. If it fails it becomes the discussion, not a project failure. |
 | **R8** (H/M) — Scope creep into Tier B or C mid-project | Requirements are frozen at the start of phase 1. Anything else goes in a "future work" section. |
-| **R10** (M/M) — Tooling defects produce plausible wrong numbers rather than errors | Three such defects already found in phase 0 (§15). Every metric that drives a decision gets a test that pins it; exception handlers are narrowed so coding errors fail loudly instead of falling back silently. |
+| **R10** (H/M, raised) — Tooling defects produce plausible wrong numbers rather than errors | **Seven** such defects now found across phases 0 and 1 (§15) — this is the dominant failure mode of the project, not an occasional one. Every metric that drives a decision gets a test that pins it; exception handlers are narrowed so coding errors fail loudly; and no output is trusted because it ran without raising. |
+| **R11** (M/M) — Incidence-angle gradient across the AOI is confounded with land cover | Measured: 10.45° spread, ~1.6 dB. Cancels between dates on one orbit but not necessarily between classes. REQ-19 tests the per-class distributions before any class comparison is reported. |
 | **R9** (M/L) — Prediction turns out wrong | Publish it anyway, with the analysis of why. A verified-and-wrong prediction, honestly reported, is worth more than a vague claim that was never testable. |
 
 Likelihood / impact shown as L/I, each H, M or L.
@@ -321,7 +419,7 @@ Likelihood / impact shown as L/I, each H, M or L.
 
 Deliberately out of scope now, listed so the architecture does not preclude them:
 
-- **A wet control AOI in Mayo.** Belmullet had 106% of average rainfall while Carlow had 73%. Running the identical pipeline over an unaffected region is a proper experimental control and would strengthen every claim in the report. Cheapest possible upgrade — the pipeline already exists, it is only more scenes.
+- **A wet control AOI in Mayo.** Belmullet had 106% of average rainfall while Carlow had 73%. Running the identical pipeline over an unaffected region is a proper experimental control and would strengthen every claim in the report. **The cost argument for deferring this is now gone** — at 48 s a scene, a second AOI roughly doubles processing to about two hours. It remains out of Tier A scope under R8, but it is the first thing to add and the decision point is the end of phase 3, not now.
 - **Sentinel-2 NDVI and NDMI cross-validation.** Independent optical confirmation of the SAR-derived signal, and a chance to quantify how many usable optical dates Irish cloud actually allows — which is itself a publishable-quality argument for SAR.
 - **InSAR coherence from SLC.** 6- and 12-day coherence rises with drying and senescence. It is an observable optical cannot give at all, and it is the strongest available demonstration of SAR understanding.
 - **Radiometric terrain flattening to γ°** instead of σ°.
@@ -370,7 +468,68 @@ Kept because a verification record with real entries and root causes is worth mo
 *Fix:* gaps measured on calendar dates. Regression test pins both the old wrong value and the correct one. Now REQ-18.
 *Impact:* none on the orbit decision, but the figure appeared in phase 0 output and would have been quoted.
 
-**Process note.** NCR-02 and NCR-03 share a root cause worth recording separately: batched string replacements applied without asserting that each one matched. Two patches silently did nothing. Every subsequent edit asserts its match count before applying.
+**NCR-05 — GUI band selection silently reduced the chain to one polarisation.**
+*Observed:* the graph exported from SNAP Graph Builder carried `selectedPolarisations = VH` in both ThermalNoiseRemoval and Calibration, and `sourceBands = Sigma0_VH` in Subset.
+*Cause:* a single highlighted band in the operator UI is interpreted as "process only this one". The setting propagated into three nodes without warning.
+*Impact if undetected:* no σ°VV, therefore no cross-ratio and no RVI — H1, H3 and half of H2 unanswerable. The output would have looked entirely normal, just with one band.
+*Caught:* reviewing the exported XML before the batch, not by running it.
+*Fix:* `VV,VH` in both operators, band list cleared in Subset. `verify_scene.py` now hard-fails on a missing band.
+
+**NCR-06 — Verification tested the AOI against the raster bounding box, not the data.**
+*Observed:* the first scene passed "AOI inside raster" with 12–14 km margins on all four sides, while σ° was valid over only 53.6% of the raster and incidence angle over 72.2%.
+*Cause:* a terrain-corrected subset is a rotated quadrilateral inside a north-up bounding box. Bounds containment says nothing about whether the AOI has data. The same routine also labelled whole-raster incidence statistics as "across the AOI".
+*Fix:* the AOI is rasterised and each band's valid fraction within it is a hard check; all statistics are AOI-restricted, with scene-wide values reported separately. Now REQ-18.
+*Outcome:* the real scene passes at 100% AOI coverage — the 4 km subset buffer does survive the ~30° rotation. The check was still wrong.
+
+**NCR-07 — AOI area reported 100× too large.**
+*Observed:* `AOI covers 16,000,000 pixels (160000 km2)`. Sixteen million 10 m pixels is 1,600 km².
+*Cause:* unit conversion written with a factor of 1e-4 instead of 1e-6.
+*Fix:* corrected. The mask itself was right; only the printed figure was wrong.
+
+**NCR-08 — `rstrip('.SAFE')` strips a character set, not a suffix.**
+*Observed:* caught in review before it ran. `"..._0041C9_702F.SAFE".rstrip(".SAFE")` yields `..._0041C9_702`, because `rstrip` removes any trailing character in `{'.','S','A','F','E'}` until one is not.
+*Cause:* a Python API whose name reads like "remove this suffix" and is not.
+*Fix:* `removesuffix`. One of the four cross-calibration products would have been silently misnamed.
+
+**NCR-09 — Batch failures reported the last line of a Java stack trace.**
+*Observed:* all four cross-calibration scenes recorded `gpt exit 1: at com.install4j.runtime.launcher.WinLauncher.main(WinLauncher.java:25)` — true, and useless. The real message, `Error: ..\\graphs\\s1_grd_preprocess_v2.xml (The system cannot find the path specified)`, was three lines above.
+*Cause:* the error extractor took the last non-empty line of stderr. Java prints the message first and the trace after it, so the last line is always the innermost frame.
+*Fix:* `gpt_error()` scans for the message line. Cost: one 13-minute download cycle diagnosed as a processing bug when it was a missing file.
+
+**NCR-10 — No preflight; a missing graph file surfaced after 13 minutes of downloading.**
+*Observed:* the batch downloaded 7 GB, then failed every scene on a path that could have been checked in microseconds.
+*Cause:* the runner validated nothing before starting work.
+*Fix:* `preflight()` checks the graph, the AOI, the `gpt` executable and the `verify_scene` import before the first byte is fetched. The `verify_scene` import was also moved inside the per-scene `try`, so a bad import fails one scene rather than the run.
+
+**NCR-11 — `requirements.txt` was out of date; pip reported success while the dependency was never installed.**
+*Observed:* `pip install -r requirements.txt` succeeded twice in a fresh venv, and `import rasterio` still failed. The file was the original three-line version and never listed rasterio, pyproj or numpy. The tool's own error message advised running the command that had just succeeded.
+*Cause:* the manifest drifted behind the code, and the diagnostic assumed the manifest was correct.
+*Fix:* six-line `requirements.txt`; `listed_in_requirements()` distinguishes "not installed" from "not even asked for" and names the stale file. A diagnostic that can only recommend one action will recommend it when it is wrong.
+
+**NCR-12 — Terrain-Correction ran with `alignToStandardGrid=false`.**
+*Observed:* the two cross-calibration pairs sit 0.421 and 0.293 pixels off a common lattice.
+*Cause:* with the flag off, SNAP takes each output's origin from that scene's own reprojected footprint. Footprints differ scene to scene, so every acquisition lands on a slightly different 10 m grid.
+*Consequence if undetected:* harmless for per-scene statistics — which is all phase 1 did, which is why five verified scenes and a passing test suite never touched it. Fatal for phase 3, which is a per-pixel time series: 82 acquisitions on 82 grids would need resampling onto a common lattice, degrading σ⁰ 82 times to recover something that was free at processing time.
+*Fix:* graph v3 sets it true; `standardGridOriginX/Y` were already 0.0, so origins snap to multiples of the 10 m pixel spacing in EPSG:2157 and all acquisitions share one grid. The four cross-calibration scenes are reprocessed before the batch.
+*Note:* found by a tool written to measure something else. `crosscal.py` had to align two rasters to compare them, so it reported the misalignment as a by-product.
+
+**NCR-13 — Flatness test flagged scatter as a slope.**
+*Observed:* `crosscal.py` reported "NOT flat; a geometric term is still in this number" for pair-A σ⁰VV, on a bin spread of 0.176 dB.
+*Cause:* the test was a bare threshold on spread. A genuine geometric residual varies monotonically with incidence angle; the observed bins rise across three bands and fall in the fourth. The AOI's incidence distribution is peaked near 37.7°, so the 34–36° and 40–42° bins hold small, land-cover-skewed samples that wander. The threshold itself was also set below the measurement's own one-day confound.
+*Fix:* flag only a spread that is both large **and** monotonic; print the pixel count beside each bin so a thin tail is visible as thin.
+*Class:* a verification tool raising a false alarm is not harmless. It spends the attention that a real alarm needs, and a tool that cries wolf gets ignored exactly when it should not be.
+
+**Process note.** Thirteen nonconformances, and **not one is an algorithm.** The SAR processing has been correct since the first scene. Four root causes recur:
+
+*(a) Batched string replacements applied without asserting each one matched* — NCR-02, NCR-03. Every subsequent edit asserts its match count before applying.
+
+*(b) Correct computation, wrong presentation* — NCR-04, NCR-06, NCR-07, NCR-09, NCR-13. Labelling, unit and diagnostic errors sitting on arithmetic that was already right. These survive review, because the code looks correct and the number looks plausible. The only defence found so far is checking output values against an independently known quantity — 16 million 10 m pixels *must* be 1,600 km², a 40 km AOI *must* be 1,600 km², and the mismatch is then obvious.
+
+*(c) Configuration and environment* — NCR-05, NCR-10, NCR-11, NCR-12. A GUI default, a missing preflight, a stale manifest, a flag left false. All cheap to find early and expensive to find late; NCR-12 in particular would have cost the entire batch.
+
+*(d) A standard-library method that does not do what its name says* — NCR-08.
+
+The pattern worth carrying forward: **the failure mode of this project is not getting the physics wrong, it is getting the plumbing wrong and not noticing.** Every defence that has actually worked — checking a printed number against an independently known quantity, asserting a patch matched, verifying before deleting, preflighting before downloading — is a check on plumbing, not on radar.
 
 ---
 
@@ -379,7 +538,7 @@ Kept because a verification record with real entries and root causes is worth mo
 1. **Do relative orbit numbers over Ireland survive the June 2026 reconfiguration, and is there a single orbit with continuous coverage across 2024–2026?** Yes to both. Orbit 1 ascending has fully-covering acquisitions in all three seasons. *(R1 closed.)*
 2. **From what date is Sentinel-1C available over Ireland, and does it overlap S1A enough to cross-calibrate directly?** S1C appears on orbit 1 from 4 April 2025 and runs alternating with S1A on a 6-day offset until S1A's last pass on 28 June 2026. S1D joins 24 April 2026. The overlap is ample — direct inter-platform comparison inside ≤14-day windows is possible throughout, which is why REQ-09 was rewritten.
 3. **Does Met Éireann's soil moisture deficit series for Oak Park cover 2024–2026 continuously, and at which drainage classes?** Still open — carried into phase 1. Met Éireann publishes daily SMD for three soil drainage classes at synoptic stations; continuity for station 375 needs checking on download.
-4. **Is the National Land Cover Map arable class fine-grained enough to give ≥1000 pixels per class per date after buffering?** Still open — carried into phase 1, resolved when the map is downloaded and clipped to the AOI.
+4. **Is the National Land Cover Map arable class fine-grained enough to give ≥1000 pixels per class per date after buffering?** Still open — carried into phase 1, resolved when the map is downloaded and clipped to the AOI. Note the AOI holds 16 million 10 m pixels, so the 1000-pixel floor is unlikely to bind; the real question is now whether the two classes span the same incidence-angle range (REQ-19).
 5. **Ascending or descending, and does overpass time matter for dew?** Settled: ascending, orbit 1, ~19:15 local. The descending candidates pass at ~07:40 local, which is peak dew on Irish grassland in summer and biases backscatter in the same direction as the drought signal. See §5.
 
-Two of five remain, both about ancillary data rather than the SAR configuration, and neither blocks phase 1.
+Two of five remain, both about ancillary data rather than the SAR configuration. Neither blocks the cross-calibration run or the bulk batch; both must close before phase 3 analysis.

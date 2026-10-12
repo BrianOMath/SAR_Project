@@ -117,7 +117,15 @@
       <pixelSpacingInMeter>10.0</pixelSpacingInMeter>
       <pixelSpacingInDegree>8.983152841195215E-5</pixelSpacingInDegree>
       <mapProjection>PROJCS[&quot;IRENET95 / Irish Transverse Mercator&quot;, GEOGCS[&quot;IRENET95&quot;, DATUM[&quot;IRENET95&quot;, SPHEROID[&quot;GRS 1980&quot;, 6378137.0, 298.257222101, AUTHORITY[&quot;EPSG&quot;,&quot;7019&quot;]], TOWGS84[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], AUTHORITY[&quot;EPSG&quot;,&quot;6173&quot;]], PRIMEM[&quot;Greenwich&quot;, 0.0, AUTHORITY[&quot;EPSG&quot;,&quot;8901&quot;]], UNIT[&quot;degree&quot;, 0.017453292519943295], AXIS[&quot;Geodetic longitude&quot;, EAST], AXIS[&quot;Geodetic latitude&quot;, NORTH], AUTHORITY[&quot;EPSG&quot;,&quot;4173&quot;]], PROJECTION[&quot;Transverse_Mercator&quot;], PARAMETER[&quot;central_meridian&quot;, -8.0], PARAMETER[&quot;latitude_of_origin&quot;, 53.5], PARAMETER[&quot;scale_factor&quot;, 0.99982], PARAMETER[&quot;false_easting&quot;, 600000.0], PARAMETER[&quot;false_northing&quot;, 750000.0], UNIT[&quot;m&quot;, 1.0], AXIS[&quot;Easting&quot;, EAST], AXIS[&quot;Northing&quot;, NORTH], AUTHORITY[&quot;EPSG&quot;,&quot;2157&quot;]]</mapProjection>
-      <alignToStandardGrid>false</alignToStandardGrid>
+      <!-- v3: TRUE, and this is not cosmetic. With it false, SNAP takes the
+           output origin from each scene's own reprojected footprint, so every
+           acquisition lands on a slightly different 10 m lattice and no two
+           rasters stack without resampling. With it true, origins snap to
+           multiples of the pixel spacing from standardGridOriginX/Y below, so
+           all 82 acquisitions share one grid and a pixel is the same piece of
+           ground in every scene. Costs nothing; unfixable after the batch
+           without reprocessing the batch. -->
+      <alignToStandardGrid>true</alignToStandardGrid>
       <standardGridOriginX>0.0</standardGridOriginX>
       <standardGridOriginY>0.0</standardGridOriginY>
       <!-- FIX 4: was true. The Barrow floodplain sits low; no reason to let
