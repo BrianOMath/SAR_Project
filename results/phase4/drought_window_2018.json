@@ -1,0 +1,15 @@
+{
+  "station": "375",
+  "year": 2018,
+  "derived_on": "2026-10-12",
+  "derived_from": "Met \u00c9ireann daily data only; no SAR input",
+  "method": "longest spell with smd_md >= 50 mm, minimum 10 days",
+  "variable": "smd_md",
+  "threshold_mm": 50.0,
+  "start": "2018-05-31",
+  "end": "2018-09-10",
+  "start_doy": 151,
+  "end_doy": 253,
+  "peak_mm": 96.8,
+  "peak_date": "2018-07-19"
+}
