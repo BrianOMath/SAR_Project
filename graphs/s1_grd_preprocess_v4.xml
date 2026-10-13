@@ -1,0 +1,274 @@
+<graph id="s1_grd_preprocess">
+  <version>1.0</version>
+
+<!--
+  Sentinel-1 IW GRDH to analysis-ready sigma0 over the Oak Park AOI.
+  Project : SAR drought 2026.  Orbit 1 ASCENDING (plan section 5).
+  Implements REQ-05, REQ-06. Replaces REQ-17's exclusion of sliced dates.
+
+  v4: TWO SLICES ASSEMBLED INSIDE THE CHAIN, NOT BEFORE IT.
+
+  On relative orbit 1 the AOI sits inside a single slice throughout 2021-2026
+  but straddles a slice boundary from 2016 to mid-2020, where the best single
+  slice covers 0.8232 of it. 121 of the 316 acquisitions need two slices,
+  including all 34 in 2018.
+
+  The first attempt assembled the raw products and then ran the v3 chain on
+  the result. SNAP refused it outright:
+
+      OperatorException: Noise removal should be applied prior to slice assembly
+
+  Thermal-noise lookup tables are per-slice and indexed by azimuth line, so
+  they cannot be applied to a product that is already two slices long. SNAP
+  stops rather than subtracting the wrong vectors, which matters here: the
+  error would have landed on VH over dry bare soil, where backscatter
+  approaches the noise floor and where this study takes its measurement.
+
+  So the graph carries two branches. Each slice is read, orbit-corrected and
+  noise-corrected on its own; SliceAssembly joins them; everything downstream
+  runs once, on the assembled product.
+
+      Read   to Apply-Orbit-File   to ThermalNoiseRemoval   .
+                                                             +. SliceAssembly
+      Read2  to Apply-Orbit-File2  to ThermalNoiseRemoval2  '        |
+                                                                     v
+      Remove-GRD-Border-Noise, Calibration, Subset, Terrain-Correction, Write
+
+  Border-noise removal stays AFTER assembly deliberately. Run per slice it
+  would trim the along-track edges that become the interior seam, cutting a
+  gap into the middle of the product. Run after, it sees one continuous image
+  and trims only its outer border, which is what the operator is for.
+
+  WHAT IS AND IS NOT SHARED WITH v3
+  Branch 1's three nodes and every node from Remove-GRD-Border-Noise onward
+  are byte-identical to v3, and branch 2 is a copy of branch 1 reading
+  ${input2}. This file was generated from v3 rather than written by hand, so
+  that is a fact about the bytes and not a claim. The per-pixel operator
+  sequence is the same in both graphs: orbit, thermal noise, border noise,
+  calibration, subset, terrain correction. Only the point at which two slices
+  become one differs.
+
+  WHICH GRAPH TO USE
+  v3  single-slice acquisitions: 195 of 316, including every scene processed
+      before assembly existed. Unchanged, so "the chain did not change" stays
+      a fact about those files.
+  v4  the 121 assembled acquisitions.
+
+  ACCEPTANCE: an assembled scene must land on ('EPSG:2157', 10.0, 10.0, 5.0,
+  5.0) like the other 158, and must agree with each slice processed alone,
+  over that slice's own ground, to better than REQ-09's 0.171 dB. See
+  check_assembly.py.
+
+  Run:
+    gpt s1_grd_preprocess_v4.xml -Pinput=<slice1.zip> -Pinput2=<slice2.zip>
+        -Poutput=<out.dim>
+-->
+
+  <node id="Read">
+    <operator>Read</operator>
+    <sources />
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <!-- FIX 5: advanced options off. The GUI had pinned bandNames and a
+           pixelRegion of 7,0,26245,16680 - a silent 7-pixel crop and a band
+           whitelist that would break on any scene of a different size. -->
+      <useAdvancedOptions>false</useAdvancedOptions>
+      <file>${input}</file>
+      <formatName>SENTINEL-1</formatName>
+      <copyMetadata>true</copyMetadata>
+    </parameters>
+  </node>
+  <node id="Apply-Orbit-File">
+    <operator>Apply-Orbit-File</operator>
+    <sources>
+      <sourceProduct refid="Read" />
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <orbitType>Sentinel Precise (Auto Download)</orbitType>
+      <polyDegree>3</polyDegree>
+      <continueOnFail>false</continueOnFail>
+    </parameters>
+  </node>
+  <node id="ThermalNoiseRemoval">
+    <operator>ThermalNoiseRemoval</operator>
+    <sources>
+      <sourceProduct refid="Apply-Orbit-File" />
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <!-- FIX 1: was VH only. -->
+      <selectedPolarisations>VV,VH</selectedPolarisations>
+      <removeThermalNoise>true</removeThermalNoise>
+      <outputNoise>false</outputNoise>
+      <reIntroduceThermalNoise>false</reIntroduceThermalNoise>
+      <!-- FIX 3: was true. Clipping negatives to zero biases the mean upward
+           exactly where backscatter approaches the noise floor - which over
+           very dry bare soil in VH is the condition this study measures.
+           Keep the negatives and handle them explicitly in the analysis. -->
+      <clipNegativeValues>false</clipNegativeValues>
+    </parameters>
+  </node>
+  <node id="Read2">
+    <operator>Read</operator>
+    <sources />
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <!-- FIX 5: advanced options off. The GUI had pinned bandNames and a
+           pixelRegion of 7,0,26245,16680 - a silent 7-pixel crop and a band
+           whitelist that would break on any scene of a different size. -->
+      <useAdvancedOptions>false</useAdvancedOptions>
+      <file>${input2}</file>
+      <formatName>SENTINEL-1</formatName>
+      <copyMetadata>true</copyMetadata>
+    </parameters>
+  </node>
+  <node id="Apply-Orbit-File2">
+    <operator>Apply-Orbit-File</operator>
+    <sources>
+      <sourceProduct refid="Read2" />
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <orbitType>Sentinel Precise (Auto Download)</orbitType>
+      <polyDegree>3</polyDegree>
+      <continueOnFail>false</continueOnFail>
+    </parameters>
+  </node>
+  <node id="ThermalNoiseRemoval2">
+    <operator>ThermalNoiseRemoval</operator>
+    <sources>
+      <sourceProduct refid="Apply-Orbit-File2" />
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <!-- FIX 1: was VH only. -->
+      <selectedPolarisations>VV,VH</selectedPolarisations>
+      <removeThermalNoise>true</removeThermalNoise>
+      <outputNoise>false</outputNoise>
+      <reIntroduceThermalNoise>false</reIntroduceThermalNoise>
+      <!-- FIX 3: was true. Clipping negatives to zero biases the mean upward
+           exactly where backscatter approaches the noise floor - which over
+           very dry bare soil in VH is the condition this study measures.
+           Keep the negatives and handle them explicitly in the analysis. -->
+      <clipNegativeValues>false</clipNegativeValues>
+    </parameters>
+  </node>
+  <node id="SliceAssembly">
+    <operator>SliceAssembly</operator>
+    <sources>
+      <sourceProduct refid="ThermalNoiseRemoval" />
+      <sourceProduct.1 refid="ThermalNoiseRemoval2" />
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations>VV,VH</selectedPolarisations>
+    </parameters>
+  </node>
+  <node id="Remove-GRD-Border-Noise">
+    <operator>Remove-GRD-Border-Noise</operator>
+    <sources>
+      <sourceProduct refid="SliceAssembly" />
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations>VV,VH</selectedPolarisations>
+      <borderLimit>500</borderLimit>
+      <trimThreshold>0.5</trimThreshold>
+    </parameters>
+  </node>
+  <node id="Calibration">
+    <operator>Calibration</operator>
+    <sources>
+      <sourceProduct refid="Remove-GRD-Border-Noise" />
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands />
+      <auxFile>Product Auxiliary File</auxFile>
+      <externalAuxFile />
+      <outputImageInComplex>false</outputImageInComplex>
+      <outputImageScaleInDb>false</outputImageScaleInDb>
+      <createGammaBand>false</createGammaBand>
+      <createBetaBand>false</createBetaBand>
+      <!-- FIX 1: was VH only. -->
+      <selectedPolarisations>VV,VH</selectedPolarisations>
+      <outputSigmaBand>true</outputSigmaBand>
+      <outputGammaBand>false</outputGammaBand>
+      <outputBetaBand>false</outputBetaBand>
+    </parameters>
+  </node>
+  <node id="Subset">
+    <operator>Subset</operator>
+    <sources>
+      <sourceProduct refid="Calibration" />
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <!-- FIX 1: was Sigma0_VH. Empty = keep every band. -->
+      <sourceBands />
+      <tiePointGrids />
+      <region>0,0,0,0</region>
+      <referenceBand />
+      <geoRegion />
+      <subSamplingX>1</subSamplingX>
+      <subSamplingY>1</subSamplingY>
+      <fullSwath>false</fullSwath>
+      <vectorFile />
+      <polygonRegion>POLYGON ((-7.261287227396498 52.633181939952756, -7.260880372263597 53.0881192975076, -6.567278545174556 53.0882179769194, -6.5681621613242624 52.63321087958732, -7.261287227396498 52.633181939952756))</polygonRegion>
+      <copyMetadata>true</copyMetadata>
+    </parameters>
+  </node>
+  <node id="Terrain-Correction">
+    <operator>Terrain-Correction</operator>
+    <sources>
+      <sourceProduct refid="Subset" />
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands />
+      <demName>Copernicus 30m Global DEM</demName>
+      <externalDEMFile />
+      <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
+      <externalDEMApplyEGM>true</externalDEMApplyEGM>
+      <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>
+      <imgResamplingMethod>BILINEAR_INTERPOLATION</imgResamplingMethod>
+      <pixelSpacingInMeter>10.0</pixelSpacingInMeter>
+      <pixelSpacingInDegree>8.983152841195215E-5</pixelSpacingInDegree>
+      <mapProjection>PROJCS["IRENET95 / Irish Transverse Mercator", GEOGCS["IRENET95", DATUM["IRENET95", SPHEROID["GRS 1980", 6378137.0, 298.257222101, AUTHORITY["EPSG","7019"]], TOWGS84[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], AUTHORITY["EPSG","6173"]], PRIMEM["Greenwich", 0.0, AUTHORITY["EPSG","8901"]], UNIT["degree", 0.017453292519943295], AXIS["Geodetic longitude", EAST], AXIS["Geodetic latitude", NORTH], AUTHORITY["EPSG","4173"]], PROJECTION["Transverse_Mercator"], PARAMETER["central_meridian", -8.0], PARAMETER["latitude_of_origin", 53.5], PARAMETER["scale_factor", 0.99982], PARAMETER["false_easting", 600000.0], PARAMETER["false_northing", 750000.0], UNIT["m", 1.0], AXIS["Easting", EAST], AXIS["Northing", NORTH], AUTHORITY["EPSG","2157"]]</mapProjection>
+      <!-- v3: TRUE, and this is not cosmetic. With it false, SNAP takes the
+           output origin from each scene's own reprojected footprint, so every
+           acquisition lands on a slightly different 10 m lattice and no two
+           rasters stack without resampling. With it true, origins snap to
+           multiples of the pixel spacing from standardGridOriginX/Y below, so
+           all 82 acquisitions share one grid and a pixel is the same piece of
+           ground in every scene. Costs nothing; unfixable after the batch
+           without reprocessing the batch. -->
+      <alignToStandardGrid>true</alignToStandardGrid>
+      <standardGridOriginX>0.0</standardGridOriginX>
+      <standardGridOriginY>0.0</standardGridOriginY>
+      <!-- FIX 4: was true. The Barrow floodplain sits low; no reason to let
+           the DEM's sea mask nibble at valley-floor pixels. -->
+      <nodataValueAtSea>false</nodataValueAtSea>
+      <saveDEM>false</saveDEM>
+      <saveLatLon>false</saveLatLon>
+      <saveIncidenceAngleFromEllipsoid>false</saveIncidenceAngleFromEllipsoid>
+      <saveLocalIncidenceAngle>false</saveLocalIncidenceAngle>
+      <!-- FIX 2: was false. This band is the only route to incidence angle -
+           it is not in the catalogue metadata. Needed for REQ-09. -->
+      <saveProjectedLocalIncidenceAngle>true</saveProjectedLocalIncidenceAngle>
+      <saveSelectedSourceBand>true</saveSelectedSourceBand>
+      <saveLayoverShadowMask>false</saveLayoverShadowMask>
+      <outputComplex>false</outputComplex>
+      <applyRadiometricNormalization>false</applyRadiometricNormalization>
+      <saveSigmaNought>false</saveSigmaNought>
+      <saveGammaNought>false</saveGammaNought>
+      <saveBetaNought>false</saveBetaNought>
+      <incidenceAngleForSigma0>Use projected local incidence angle from DEM</incidenceAngleForSigma0>
+      <incidenceAngleForGamma0>Use projected local incidence angle from DEM</incidenceAngleForGamma0>
+      <auxFile>Latest Auxiliary File</auxFile>
+      <applyAPDCorrection>false</applyAPDCorrection>
+      <externalAuxFile />
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="Terrain-Correction" />
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <!-- FIX 6: was a hardcoded C:\Users\bomat\target.dim. -->
+      <file>${output}</file>
+      <formatName>BEAM-DIMAP</formatName>
+    </parameters>
+  </node>
+</graph>

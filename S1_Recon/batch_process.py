@@ -54,8 +54,13 @@ from dataclasses import dataclass, asdict, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
+import xml.etree.ElementTree as ET
+import zipfile
 
 import requests
+
+import slices
+from s1_recon import load_aoi
 
 TOKEN_URL = ("https://identity.dataspace.copernicus.eu/auth/realms/CDSE"
              "/protocol/openid-connect/token")
@@ -71,19 +76,50 @@ MIN_FREE_GB = 12.0    # refuse to start a download below this
 # --------------------------------------------------------------------------
 
 @dataclass
-class Job:
-    """One acquisition to process."""
-    date: str
-    platform: str
+class Product:
+    """One catalogue product: a single GRD slice."""
     product_id: str
     name: str
     size_bytes: int
+
+
+@dataclass
+class Job:
+    """One acquisition to process: one product, or several to be assembled.
+
+    On relative orbit 1 the AOI sits inside a single slice throughout
+    2021-2026 but straddles a slice boundary from 2016 to mid-2020, where the
+    best single slice covers 0.8232 of it. 121 of the 316 acquisitions need
+    two slices assembled; the rest are a single product, processed by exactly
+    the path that produced the existing results.
+
+    product_id, name and size_bytes stay available as properties so the
+    manifest columns and the disk-space arithmetic do not change shape.
+    """
+    date: str
+    platform: str
     relative_orbit: int
     orbit_direction: str
+    action: str                 # 'single' | 'assemble'
+    products: list[Product]
 
     @property
     def stem(self) -> str:
         return f"{self.date.replace('-', '')}_{self.platform}"
+
+    @property
+    def size_bytes(self) -> int:
+        return sum(p.size_bytes for p in self.products)
+
+    @property
+    def product_id(self) -> str:
+        """Every product behind this acquisition, so the manifest records
+        exactly what was used. Comma-separated for an assembly."""
+        return ",".join(p.product_id for p in self.products)
+
+    @property
+    def name(self) -> str:
+        return self.products[0].name
 
 
 @dataclass
@@ -111,15 +147,23 @@ def read_scenes(path: Path) -> list[dict]:
 def build_jobs(rows: Iterable[dict],
                relative_orbit: int,
                orbit_direction: str,
+               aoi,
                years: Sequence[int] | None = None,
                dates: Sequence[str] | None = None,
                months: tuple[int, int] | None = (4, 10)) -> tuple[list[Job], list[Result]]:
     """Select acquisitions and return (jobs, exclusions).
 
-    Products are grouped by date. An acquisition that arrived as more than one
-    GRD slice is EXCLUDED and the exclusion recorded, per REQ-17 — mosaicking
-    is not implemented, and silently processing one slice of two would be the
-    worst of the available options.
+    Products are grouped by date and each date is planned by
+    `slices.plan_acquisition`, which de-duplicates the catalogue, keeps only
+    the slices touching the AOI, prefers a single slice wherever one covers
+    the AOI alone, and validates anything it proposes to assemble.
+
+    This replaces REQ-17's blanket exclusion of multi-slice dates. That rule
+    was correct while mosaicking did not exist -- processing one slice of two
+    would have put a partial footprint into the series invisibly -- but it
+    removed every acquisition in 2018, 2019 and 2020, which is to say the
+    whole confirmatory test. Exclusions are still possible and still recorded;
+    they are now specific, and `plan_acquisition` says why.
     """
     by_date: dict[str, list[dict]] = {}
     for r in rows:
@@ -141,18 +185,23 @@ def build_jobs(rows: Iterable[dict],
     for day in sorted(by_date):
         group = by_date[day]
         plat = group[0]["platform"]
-        if len(group) > 1:
+        stem = f"{day.replace('-', '')}_{plat}"
+        planned = slices.plan_acquisition(group, aoi)
+
+        if planned["action"] == "exclude":
             excluded.append(Result(
-                date=day, platform=plat, stem=f"{day.replace('-', '')}_{plat}",
-                status="skipped",
-                detail=f"{len(group)} GRD slices on this date; mosaicking not "
-                       f"implemented, excluded per REQ-17"))
+                date=day, platform=plat, stem=stem, status="skipped",
+                detail=planned["reason"]))
             continue
-        r = group[0]
+
         jobs.append(Job(
-            date=day, platform=plat, product_id=r["product_id"], name=r["name"],
-            size_bytes=int(r["size_bytes"]), relative_orbit=int(r["relative_orbit"]),
-            orbit_direction=r["orbit_direction"]))
+            date=day, platform=plat,
+            relative_orbit=int(group[0]["relative_orbit"]),
+            orbit_direction=group[0]["orbit_direction"],
+            action=planned["action"],
+            products=[Product(product_id=r["product_id"], name=r["name"],
+                              size_bytes=int(r["size_bytes"]))
+                      for r in planned["products"]]))
     return jobs, excluded
 
 
@@ -378,9 +427,19 @@ def import_problem(req: Path | None = None) -> list[str]:
                 f"{sys.executable} — run: python -m pip install -r requirements.txt"]
 
 
-def run_gpt(gpt: Path, graph: Path, src: Path, dst: Path,
+def run_gpt(gpt: Path, graph: Path, srcs, dst: Path,
             cache: str, threads: int, log: Path) -> tuple[bool, str]:
-    cmd = [str(gpt), str(graph), f"-Pinput={src}", f"-Poutput={dst}",
+    """Run a graph over one or more source products.
+
+    v3 takes a single product as ${input}. v4 assembles two slices and takes
+    them as ${input} and ${input2}, in acquisition order -- SliceAssembly
+    concatenates along-track, so the order is not decorative.
+    """
+    if isinstance(srcs, Path):
+        srcs = [srcs]
+    inputs = [f"-Pinput={srcs[0]}"]
+    inputs += [f"-Pinput{i}={s}" for i, s in enumerate(srcs[1:], start=2)]
+    cmd = [str(gpt), str(graph), *inputs, f"-Poutput={dst}",
            "-c", cache, "-q", str(threads)]
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -390,6 +449,34 @@ def run_gpt(gpt: Path, graph: Path, src: Path, dst: Path,
     if proc.returncode != 0:
         return False, f"gpt exit {proc.returncode}: {gpt_error(proc.stdout, proc.stderr)[:200]}"
     return True, f"{time.time() - t0:.0f}s"
+
+
+def ipf_from_safe(zip_path: Path) -> str:
+    """The IPF processor version from a downloaded SAFE zip, or "" if unreadable.
+
+    Read from manifest.safe rather than the catalogue, because this is the
+    version of the bytes actually on disk. Returns "" rather than raising: a
+    missing version is reported by `slices.ipf_consistent` alongside whatever
+    else it finds, instead of aborting mid-batch.
+    """
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            names = [n for n in z.namelist() if n.endswith("manifest.safe")]
+            if not names:
+                return ""
+            with z.open(sorted(names, key=len)[0]) as fh:
+                root = ET.parse(fh).getroot()
+    except (OSError, zipfile.BadZipFile, ET.ParseError):
+        return ""
+
+    # <safe:software name="Sentinel-1 IPF" version="002.84"/>, namespaced.
+    for el in root.iter():
+        if el.tag.rsplit("}", 1)[-1] != "software":
+            continue
+        version = el.get("version") or ""
+        if version and "IPF" in (el.get("name") or "IPF"):
+            return version
+    return ""
 
 
 def verify(dim: Path, aoi: Path, log: Path) -> tuple[bool, str]:
@@ -452,19 +539,27 @@ def downloader(jobs: Sequence[Job], raw_dir: Path, q: "queue.Queue",
     for job in jobs:
         if stop.is_set():
             break
-        # removesuffix, NOT rstrip: rstrip removes any trailing characters in
-        # the set {'.','S','A','F','E'}, so a product ending ..._702F.SAFE
-        # loses its final F. That is a real product id in this batch.
-        dest = raw_dir / f"{job.name.removesuffix('.SAFE')}.zip"
         try:
-            if dest.exists() and dest.stat().st_size == job.size_bytes:
-                q.put((job, dest, 0.0, None))     # already on disk from a prior run
-                continue
-            need = job.size_bytes / 1e9 * 2.5
-            while free_gb(raw_dir) < max(MIN_FREE_GB, need) and not stop.is_set():
-                time.sleep(20)                    # wait for the processor to free space
-            secs = download_product(cdse, job.product_id, dest)
-            q.put((job, dest, secs, None))
+            paths: list[Path] = []
+            secs = 0.0
+            for prod in job.products:
+                # removesuffix, NOT rstrip: rstrip removes any trailing
+                # characters in the set {'.','S','A','F','E'}, so a product
+                # ending ..._702F.SAFE loses its final F. That is a real
+                # product id in this batch.
+                dest = raw_dir / f"{prod.name.removesuffix('.SAFE')}.zip"
+                if dest.exists() and dest.stat().st_size == prod.size_bytes:
+                    paths.append(dest)            # already on disk from a prior run
+                    continue
+                # Headroom for every slice of this acquisition plus the
+                # assembled intermediate, which is as large as the slices
+                # together.
+                need = job.size_bytes / 1e9 * 2.5
+                while free_gb(raw_dir) < max(MIN_FREE_GB, need) and not stop.is_set():
+                    time.sleep(20)                # wait for the processor to free space
+                secs += download_product(cdse, prod.product_id, dest)
+                paths.append(dest)
+            q.put((job, paths, secs, None))
         except Exception as exc:                  # noqa: BLE001
             q.put((job, None, 0.0, exc))
     q.put(None)                                   # sentinel
@@ -474,7 +569,18 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scenes", type=Path, required=True, help="scenes.csv from s1_recon")
-    p.add_argument("--graph", type=Path, required=True, help="SNAP graph XML")
+    p.add_argument("--graph", type=Path, required=True,
+                   help="SNAP graph for single-slice acquisitions (v3)")
+    p.add_argument("--graph-assembled", type=Path,
+                   help="SNAP graph for assembled acquisitions (v4: v3 with the "
+                        "Read formatName removed). Defaults to --graph with "
+                        "v3 replaced by v4.")
+    p.add_argument("--allow-mixed-ipf", action="store_true",
+                   help="assemble slices processed on different IPF baselines. "
+                        "Off by default: a baseline difference puts a "
+                        "radiometric step at the seam, and that only cancels "
+                        "in a spatial contrast if every stratum is spread "
+                        "evenly across the boundary.")
     p.add_argument("--aoi", type=Path, required=True, help="AOI GeoJSON")
     p.add_argument("--out", type=Path, required=True, help="processed output directory")
     p.add_argument("--raw", type=Path, required=True, help="raw download directory")
@@ -493,11 +599,20 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
 
     months = None if args.all_months else tuple(args.months)
+    if args.graph_assembled is None:
+        args.graph_assembled = args.graph.with_name(
+            args.graph.name.replace("v3", "v4"))
+
     rows = read_scenes(args.scenes)
+    aoi = load_aoi(args.aoi)
     jobs, excluded = build_jobs(rows, args.relative_orbit, args.orbit_direction,
-                                args.years, args.dates, months)
+                                aoi, args.years, args.dates, months)
+    n_asm = sum(1 for j in jobs if j.action == "assemble")
 
     problems = preflight(args.gpt, args.graph, args.aoi)
+    if n_asm and not args.graph_assembled.is_file():
+        problems.append(f"{n_asm} acquisitions need assembly but the assembled "
+                        f"graph is missing: {args.graph_assembled}")
     if problems:
         print("preflight failed — nothing downloaded:", file=sys.stderr)
         for pb in problems:
@@ -511,8 +626,12 @@ def main(argv=None) -> int:
     print(f"selected   : orbit {args.relative_orbit} {args.orbit_direction}")
     print(f"acquisitions: {len(jobs)}  ({len(skip)} already verified, "
           f"{len(todo)} to run)")
+    n_asm_todo = sum(1 for j in todo if j.action == "assemble")
+    if n_asm_todo:
+        print(f"assembly   : {n_asm_todo} of {len(todo)} need slices assembled "
+              f"({args.graph_assembled.name})")
     if excluded:
-        print(f"excluded   : {len(excluded)} multi-slice acquisitions (REQ-17)")
+        print(f"excluded   : {len(excluded)} acquisitions")
         for e in excluded:
             print(f"             {e.date} {e.platform} — {e.detail}")
     print(f"download   : {total_gb(todo):.0f} GB")
@@ -520,7 +639,9 @@ def main(argv=None) -> int:
 
     if args.dry_run:
         for j in todo[:10]:
-            print(f"  would run {j.stem}  {j.name[:60]}")
+            how = (f"assemble {len(j.products)}" if j.action == "assemble"
+                   else "single     ")
+            print(f"  would run {j.stem}  {how}  {j.name[:52]}")
         if len(todo) > 10:
             print(f"  ... and {len(todo) - 10} more")
         return 0
@@ -560,10 +681,45 @@ def main(argv=None) -> int:
                 continue
 
             dim = args.out / f"{job.stem}.dim"
+            logs = args.out / "logs"
             t0 = time.time()
-            ok, detail = run_gpt(args.gpt, args.graph, src, dim, args.cache,
-                                 args.threads, args.out / "logs" / f"{job.stem}.gpt.log")
+            graph = args.graph
+            versions: dict[str, str] = {}
+
+            if job.action == "assemble":
+                # The seam check, before the slices are joined. A uniform
+                # offset between IPF baselines cancels in a same-image spatial
+                # contrast; a step across the seam only cancels if every
+                # stratum is spread evenly on both sides of it, and nothing
+                # guarantees that.
+                versions = {p.name: ipf_from_safe(s)
+                            for p, s in zip(job.products, src)}
+                ipf_problems = slices.ipf_consistent(versions)
+                if ipf_problems and not args.allow_mixed_ipf:
+                    detail = "; ".join(ipf_problems)[:200]
+                    print(f"IPF MISMATCH — {detail}  (raw kept)")
+                    append_manifest(manifest, Result(
+                        job.date, job.platform, job.stem, "gpt_failed",
+                        detail, dl_s, time.time() - t0, job.product_id))
+                    n_fail += 1
+                    continue
+                if ipf_problems:
+                    print(f"\n    WARNING, proceeding under --allow-mixed-ipf: "
+                          f"{'; '.join(ipf_problems)}")
+                graph = args.graph_assembled
+
+            # v4 assembles inside the graph, so both slices go to one gpt call
+            # and there is no intermediate product to clean up. SNAP will not
+            # remove thermal noise from an already-assembled product, which is
+            # why assembly cannot be a separate earlier step.
+            ok, detail = run_gpt(args.gpt, graph, src, dim, args.cache,
+                                 args.threads, logs / f"{job.stem}.gpt.log")
             proc_s = time.time() - t0
+
+            if job.action == "assemble":
+                ipf = sorted({v for v in versions.values() if v})
+                detail = f"assembled {len(job.products)} slices, IPF " \
+                         f"{','.join(ipf) or 'unknown'}; {detail}"
 
             if not ok:
                 print(f"GPT FAILED — {detail}")
@@ -574,15 +730,18 @@ def main(argv=None) -> int:
                 continue
 
             vok, vdetail = verify(dim, args.aoi,
-                                  args.out / "logs" / f"{job.stem}.verify.log")
+                                  logs / f"{job.stem}.verify.log")
             status = "verified" if vok else "verify_failed"
+            if job.action == "assemble":
+                vdetail = f"{detail} | {vdetail}"
             append_manifest(manifest, Result(job.date, job.platform, job.stem, status,
                                              vdetail, dl_s, proc_s, job.product_id))
 
             if vok:
                 # Raw is deleted only now: after processing AND verification.
                 if not args.keep_raw:
-                    src.unlink(missing_ok=True)
+                    for s in src:
+                        s.unlink(missing_ok=True)
                 print(f"ok  dl {dl_s:5.0f}s  proc {proc_s:4.0f}s")
                 n_ok += 1
             else:

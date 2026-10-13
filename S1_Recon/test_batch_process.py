@@ -12,8 +12,11 @@ import pytest
 
 from pathlib import Path
 
+from shapely.geometry import box
+
 from batch_process import (
     Job,
+    Product,
     Result,
     already_done,
     append_manifest,
@@ -41,17 +44,38 @@ java.io.FileNotFoundException: ..\\graphs\\s1_grd_preprocess_v2.xml (The system 
 '''
 
 
+# Geometry for slice planning. The AOI spans y 0..10 and the slice boundary
+# falls at y = 1.768, so UPPER holds 82.32% of the AOI and LOWER 17.68% --
+# the real 2016-2020 split on relative orbit 1, where the best single slice
+# measures 0.8232 stable to four decimals.
+AOI = box(0, 0, 10, 10)
+FULL = box(-2, -5, 12, 20)
+LOWER = box(-2, -5, 12, 1.768)
+UPPER = box(-2, 1.768, 12, 20)
+
+
 def row(date, platform="S1A", orbit=1, direction="ASCENDING",
-        pid=None, size=1_760_000_000, name=None):
+        pid=None, size=1_760_000_000, name=None, geom=None,
+        start_hms="181402", stop_hms="181427",
+        datatake="006A7D", unique="80F9"):
+    """One scenes.csv row.
+
+    The name is built to the real GRD pattern rather than a placeholder,
+    because slice planning parses it: the datatake and start time identify
+    which real slice a product is a publication of, and the trailing unique id
+    is what differs between two publications of the same slice.
+    """
     stamp = date.replace("-", "")
     return {
-        "product_id": pid or f"id-{stamp}-{platform}",
-        "name": name or f"{platform}_IW_GRDH_1SDV_{stamp}T181402_x.SAFE",
+        "product_id": pid or f"id-{stamp}-{platform}-{unique}",
+        "name": name or (f"{platform}_IW_GRDH_1SDV_{stamp}T{start_hms}_"
+                         f"{stamp}T{stop_hms}_003717_{datatake}_{unique}.SAFE"),
         "start": f"{date} 18:14:02+00:00",
         "platform": platform,
         "relative_orbit": str(orbit),
         "orbit_direction": direction,
         "size_bytes": str(size),
+        "footprint_wkt": (geom or FULL).wkt,
     }
 
 
@@ -63,72 +87,148 @@ def test_selects_only_the_configured_orbit_and_direction():
     rows = [row("2026-07-17"),
             row("2026-07-18", orbit=103),
             row("2026-07-19", direction="DESCENDING")]
-    jobs, _ = build_jobs(rows, 1, "ASCENDING")
+    jobs, _ = build_jobs(rows, 1, "ASCENDING", AOI)
     assert [j.date for j in jobs] == ["2026-07-17"]
 
 
 def test_direction_match_is_case_insensitive():
-    jobs, _ = build_jobs([row("2026-07-17", direction="ascending")], 1, "ASCENDING")
+    jobs, _ = build_jobs([row("2026-07-17", direction="ascending")], 1, "ASCENDING", AOI)
     assert len(jobs) == 1
 
 
 def test_month_window_is_applied():
     rows = [row("2026-03-15"), row("2026-07-17"), row("2026-12-01")]
-    jobs, _ = build_jobs(rows, 1, "ASCENDING", months=(4, 10))
+    jobs, _ = build_jobs(rows, 1, "ASCENDING", AOI, months=(4, 10))
     assert [j.date for j in jobs] == ["2026-07-17"]
 
 
 def test_all_months_when_window_is_none():
     rows = [row("2026-03-15"), row("2026-12-01")]
-    jobs, _ = build_jobs(rows, 1, "ASCENDING", months=None)
+    jobs, _ = build_jobs(rows, 1, "ASCENDING", AOI, months=None)
     assert len(jobs) == 2
 
 
 def test_year_filter():
     rows = [row("2024-07-17"), row("2025-07-17"), row("2026-07-17")]
-    jobs, _ = build_jobs(rows, 1, "ASCENDING", years=[2025, 2026])
+    jobs, _ = build_jobs(rows, 1, "ASCENDING", AOI, years=[2025, 2026])
     assert [j.date[:4] for j in jobs] == ["2025", "2026"]
 
 
 def test_explicit_dates_win_over_everything_but_orbit():
     rows = [row(d) for d in ("2026-04-23", "2026-06-28", "2026-07-17")]
-    jobs, _ = build_jobs(rows, 1, "ASCENDING",
+    jobs, _ = build_jobs(rows, 1, "ASCENDING", AOI,
                          dates=["2026-04-23", "2026-06-28"])
     assert [j.date for j in jobs] == ["2026-04-23", "2026-06-28"]
 
 
 def test_jobs_come_back_in_date_order():
     rows = [row("2026-07-17"), row("2026-04-23"), row("2026-06-28")]
-    jobs, _ = build_jobs(rows, 1, "ASCENDING")
+    jobs, _ = build_jobs(rows, 1, "ASCENDING", AOI)
     assert [j.date for j in jobs] == sorted(j.date for j in jobs)
 
 
 # --------------------------------------------------------------------------
-# REQ-17: multi-slice acquisitions are excluded, not silently half-processed
+# slice assembly, which replaced REQ-17's blanket exclusion
 # --------------------------------------------------------------------------
+# REQ-17 excluded every multi-slice date, which was right while mosaicking did
+# not exist: half-processing an acquisition would have put a partial footprint
+# into the series with nothing downstream to catch it. But it removed all 34
+# acquisitions in 2018, all 34 in 2019 and all 35 in 2020 -- the entire
+# confirmatory test. These tests pin the behaviour that replaced it.
 
-def test_multi_slice_acquisition_is_excluded_with_a_reason():
-    rows = [row("2025-04-04", pid="a", name="S1C_..._1.SAFE"),
-            row("2025-04-04", pid="b", name="S1C_..._2.SAFE")]
-    jobs, excluded = build_jobs(rows, 1, "ASCENDING")
+def pair_2018(date="2018-07-04"):
+    """The real two-slice geometry: 0.1768 + 0.8232, contiguous, one datatake."""
+    return [row(date, start_hms="181416", stop_hms="181441",
+                datatake="027435", unique="4422", geom=LOWER),
+            row(date, start_hms="181441", stop_hms="181506",
+                datatake="027435", unique="479A", geom=UPPER)]
+
+
+def test_two_partial_slices_are_assembled_not_excluded():
+    jobs, excluded = build_jobs(pair_2018(), 1, "ASCENDING", AOI)
+    assert excluded == []
+    assert len(jobs) == 1
+    assert jobs[0].action == "assemble"
+    assert len(jobs[0].products) == 2
+
+
+def test_assembled_products_are_in_acquisition_order():
+    """SliceAssembly concatenates along-track; order is not decorative."""
+    jobs, _ = build_jobs(list(reversed(pair_2018())), 1, "ASCENDING", AOI)
+    assert [p.name for p in jobs[0].products] == [
+        n["name"] for n in pair_2018()]
+
+
+def test_an_assembly_job_sums_the_size_of_every_slice():
+    jobs, _ = build_jobs(pair_2018(), 1, "ASCENDING", AOI)
+    assert jobs[0].size_bytes == 2 * 1_760_000_000
+
+
+def test_an_assembly_job_records_every_product_id():
+    """The manifest must say what was actually used, not just the first slice."""
+    jobs, _ = build_jobs(pair_2018(), 1, "ASCENDING", AOI)
+    assert jobs[0].product_id.count(",") == 1
+    for p in jobs[0].products:
+        assert p.product_id in jobs[0].product_id
+
+
+def test_a_lone_partial_slice_is_excluded_with_its_coverage_named():
+    """Still excluded, but now specifically, and the reason carries the number."""
+    jobs, excluded = build_jobs([pair_2018()[1]], 1, "ASCENDING", AOI)
     assert jobs == []
     assert len(excluded) == 1
     assert excluded[0].status == "skipped"
-    assert "REQ-17" in excluded[0].detail
-    assert "2 GRD slices" in excluded[0].detail
+    assert "0.8232" in excluded[0].detail
 
 
 def test_exclusion_does_not_stop_the_other_dates():
-    rows = [row("2025-04-04", pid="a"), row("2025-04-04", pid="b"),
-            row("2025-04-10", pid="c")]
-    jobs, excluded = build_jobs(rows, 1, "ASCENDING")
+    rows = pair_2018()[1:] + [row("2025-04-10", pid="c")]
+    jobs, excluded = build_jobs(rows, 1, "ASCENDING", AOI)
     assert [j.date for j in jobs] == ["2025-04-10"]
     assert len(excluded) == 1
 
 
-def test_single_slice_date_is_not_excluded():
-    jobs, excluded = build_jobs([row("2026-07-17")], 1, "ASCENDING")
+def test_single_full_slice_is_not_excluded():
+    jobs, excluded = build_jobs([row("2026-07-17")], 1, "ASCENDING", AOI)
     assert len(jobs) == 1 and excluded == []
+    assert jobs[0].action == "single"
+    assert len(jobs[0].products) == 1
+
+
+def test_two_publications_of_one_slice_collapse_to_a_single_product():
+    """83 dates in the catalogue carry the same real slice published twice --
+    identical datatake and start time, different trailing id. Feeding both to
+    SliceAssembly would assemble a strip with itself."""
+    rows = [row("2026-07-17", unique="AAAA"), row("2026-07-17", unique="BBBB")]
+    jobs, excluded = build_jobs(rows, 1, "ASCENDING", AOI)
+    assert excluded == []
+    assert len(jobs) == 1
+    assert jobs[0].action == "single"
+    assert len(jobs[0].products) == 1
+
+
+def test_a_full_coverage_reslicing_is_taken_singly_not_assembled():
+    """2022-10-11: one datatake, re-sliced two seconds apart, each product
+    covering the AOI on its own. Neither assembly nor exclusion -- take one."""
+    rows = [row("2022-10-11", start_hms="181455", stop_hms="181520",
+                datatake="056DAA", unique="F323", geom=FULL),
+            row("2022-10-11", start_hms="181457", stop_hms="181522",
+                datatake="056DAA", unique="E714", geom=FULL)]
+    jobs, excluded = build_jobs(rows, 1, "ASCENDING", AOI)
+    assert excluded == []
+    assert len(jobs) == 1 and jobs[0].action == "single"
+    assert len(jobs[0].products) == 1
+
+
+def test_a_slice_outside_the_aoi_is_not_downloaded():
+    """A pass over Ireland can arrive as four slices with two of them far from
+    Carlow. Each is 1.7 GB."""
+    rows = pair_2018() + [row("2018-07-04", start_hms="181506",
+                              stop_hms="181531", datatake="027435",
+                              unique="FFFF", geom=box(100, 100, 110, 110))]
+    jobs, _ = build_jobs(rows, 1, "ASCENDING", AOI)
+    assert len(jobs[0].products) == 2
+    assert all("FFFF" not in p.name for p in jobs[0].products)
 
 
 # --------------------------------------------------------------------------
@@ -145,7 +245,7 @@ def test_already_done_counts_only_verified():
 
 def test_plan_skips_completed_and_keeps_the_rest():
     jobs, _ = build_jobs([row("2026-07-17", "S1D"), row("2026-07-11", "S1C")],
-                         1, "ASCENDING")
+                         1, "ASCENDING", AOI)
     todo, skip = plan(jobs, {"20260717_S1D"})
     assert [j.stem for j in skip] == ["20260717_S1D"]
     assert [j.stem for j in todo] == ["20260711_S1C"]
@@ -153,14 +253,14 @@ def test_plan_skips_completed_and_keeps_the_rest():
 
 def test_a_failed_scene_is_retried_on_the_next_run():
     """The point of resume: failures come back, successes do not."""
-    jobs, _ = build_jobs([row("2026-07-17", "S1D")], 1, "ASCENDING")
+    jobs, _ = build_jobs([row("2026-07-17", "S1D")], 1, "ASCENDING", AOI)
     done = already_done([{"stem": "20260717_S1D", "status": "verify_failed"}])
     todo, skip = plan(jobs, done)
     assert len(todo) == 1 and skip == []
 
 
 def test_plan_is_empty_when_everything_is_done():
-    jobs, _ = build_jobs([row("2026-07-17", "S1D")], 1, "ASCENDING")
+    jobs, _ = build_jobs([row("2026-07-17", "S1D")], 1, "ASCENDING", AOI)
     todo, _ = plan(jobs, {"20260717_S1D"})
     assert todo == []
 
@@ -175,7 +275,7 @@ def test_plan_is_empty_when_everything_is_done():
     ("2024-06-26", "S1A", "20240626_S1A"),
 ])
 def test_stem_matches_the_existing_naming_convention(date, platform, expected):
-    jobs, _ = build_jobs([row(date, platform)], 1, "ASCENDING")
+    jobs, _ = build_jobs([row(date, platform)], 1, "ASCENDING", AOI)
     assert jobs[0].stem == expected
 
 
@@ -191,7 +291,7 @@ def test_raw_filename_keeps_the_whole_product_id():
 
 def test_total_gb():
     jobs, _ = build_jobs([row("2026-07-17", size=2_000_000_000),
-                          row("2026-07-11", size=1_000_000_000)], 1, "ASCENDING")
+                          row("2026-07-11", size=1_000_000_000)], 1, "ASCENDING", AOI)
     assert total_gb(jobs) == pytest.approx(3.0)
 
 
