@@ -406,14 +406,33 @@ def main(argv=None) -> int:
         if not w.get("start_doy"):
             print(f"{args.window_from} defines no window; using the full limb")
         else:
-            lo_doy, hi_doy = int(w["start_doy"]), int(w["end_doy"])
+            win_lo, win_hi = int(w["start_doy"]), int(w["end_doy"])
+            # Amendment 1 to the 2018 pre-registration: the fit range is the
+            # met-derived window INTERSECTED with the senescence limb, not the
+            # window itself. The two rules answer different questions -- the
+            # met rule says when the drought ran, the limb bounds say when the
+            # vegetation signal is monotonic -- and a slope is only meaningful
+            # where both hold. 2018's window opens on DOY 151, a month before
+            # peak biomass; fitting a line from there would run it through a
+            # maximum and call the result a senescence rate.
+            lo_doy, hi_doy = max(win_lo, PEAK_DOY), min(win_hi, END_DOY)
             window_tag = "_window"
             print(f"drought window from {args.window_from.name}:")
-            print(f"  {w['start']} to {w['end']}  (DOY {lo_doy}-{hi_doy}, "
-                  f"{hi_doy - lo_doy + 1} days)")
+            print(f"  {w['start']} to {w['end']}  (DOY {win_lo}-{win_hi}, "
+                  f"{win_hi - win_lo + 1} days)")
             print(f"  rule: {w.get('method', '?')}")
             print(f"  derived from: {w.get('derived_from', '?')}")
-            print(f"  frozen on: {w.get('derived_on', '?')}\n")
+            print(f"  frozen on: {w.get('derived_on', '?')}")
+            if (lo_doy, hi_doy) != (win_lo, win_hi):
+                print(f"  intersected with the senescence limb "
+                      f"(DOY {PEAK_DOY}-{END_DOY}) per Amendment 1")
+            print(f"  FIT RANGE: DOY {lo_doy}-{hi_doy}  "
+                  f"({hi_doy - lo_doy + 1} days)\n")
+            if lo_doy > hi_doy:
+                raise SystemExit(
+                    f"the window (DOY {win_lo}-{win_hi}) does not overlap the "
+                    f"senescence limb (DOY {PEAK_DOY}-{END_DOY}); there is "
+                    f"nothing to fit")
     else:
         print(f"full senescence limb, DOY {lo_doy}-{hi_doy}\n")
 
@@ -504,7 +523,8 @@ def main(argv=None) -> int:
         print(f"\n{'=' * 70}\nPRIMARY -- {args.treat_year} against the "
               f"{len(base_years)}-year baseline distribution\n"
               f"observable: {METRIC_NAME[args.metric]}\n"
-              f"senescence slope, 1 Jul to 30 Sep, dB per month\n{'=' * 70}")
+              f"senescence slope, DOY {lo_doy}-{hi_doy}, dB per month"
+              f"\n{'=' * 70}")
         for a, b in CONTRASTS:
             key = f"{a}_minus_{b}"
             fits = {y: slope_per_month(*limb(y, key))
