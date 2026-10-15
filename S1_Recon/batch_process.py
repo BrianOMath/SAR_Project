@@ -70,6 +70,24 @@ DOWNLOAD_URL = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products({pid
 PREFETCH = 1          # raw products downloaded ahead of the processor
 MIN_FREE_GB = 12.0    # refuse to start a download below this
 
+# Retry policy, sized for CDSE throttling rather than for a dropped packet.
+# 30s, 60s, 120s, 240s, 480s between six attempts: about 15 minutes of patience
+# before a product is given up on, against the 15 seconds that preceded it.
+MAX_RETRIES = 6
+RETRY_BASE_S = 30.0
+
+# Separate connect and read timeouts. A throttled host refuses the handshake,
+# which a 30-second connect timeout discovers four times faster than the 120
+# seconds that applied to both phases before. The read timeout stays generous
+# because a 1.7 GB product legitimately takes a while between chunks.
+CONNECT_TIMEOUT_S = 30.0
+READ_TIMEOUT_S = 300.0
+
+# After a product is given up on, wait before starting the next one. Charging
+# straight into the next download is what turned one refusal into a run of
+# consecutive failures.
+THROTTLE_COOLDOWN_S = 900.0
+
 
 # --------------------------------------------------------------------------
 # data model
@@ -281,7 +299,7 @@ class Cdse:
 
 
 def download_product(cdse: Cdse, product_id: str, dest: Path,
-                     max_retries: int = 3) -> float:
+                     max_retries: int = MAX_RETRIES) -> float:
     """Stream one product to `dest`. Returns elapsed seconds.
 
     requests drops the Authorization header on a cross-host redirect, and CDSE
@@ -295,14 +313,15 @@ def download_product(cdse: Cdse, product_id: str, dest: Path,
     for attempt in range(max_retries):
         try:
             headers = {"Authorization": f"Bearer {cdse.token()}"}
+            timeout = (CONNECT_TIMEOUT_S, READ_TIMEOUT_S)
             r = cdse.s.get(url, headers=headers, stream=True,
-                           allow_redirects=False, timeout=120)
+                           allow_redirects=False, timeout=timeout)
             hops = 0
             while r.status_code in (301, 302, 303, 307, 308) and hops < 10:
                 nxt = r.headers["Location"]
                 r.close()
                 r = cdse.s.get(nxt, headers=headers, stream=True,
-                               allow_redirects=False, timeout=120)
+                               allow_redirects=False, timeout=timeout)
                 hops += 1
             r.raise_for_status()
 
@@ -317,8 +336,11 @@ def download_product(cdse: Cdse, product_id: str, dest: Path,
             tmp.unlink(missing_ok=True)
             if attempt == max_retries - 1:
                 raise
-            wait = 5 * 2 ** attempt
-            print(f"    download retry {attempt + 1}/{max_retries} in {wait}s ({exc})",
+            wait = RETRY_BASE_S * 2 ** attempt
+            # One line per retry. The full urllib3 message runs to several
+            # hundred characters and buries the batch's own output.
+            why = " ".join(str(exc).split())[:110]
+            print(f"    retry {attempt + 1}/{max_retries} in {wait:.0f}s — {why}",
                   file=sys.stderr)
             time.sleep(wait)
     raise RuntimeError("unreachable")
@@ -534,8 +556,15 @@ def append_manifest(path: Path, result: Result) -> None:
 # --------------------------------------------------------------------------
 
 def downloader(jobs: Sequence[Job], raw_dir: Path, q: "queue.Queue",
-               cdse: Cdse, stop: threading.Event) -> None:
-    """Producer: keeps PREFETCH raw products ready for the processor."""
+               cdse: Cdse, stop: threading.Event,
+               cooldown_s: float = THROTTLE_COOLDOWN_S) -> None:
+    """Producer: keeps PREFETCH raw products ready for the processor.
+
+    A product that exhausts its retries is reported and the queue continues,
+    but only after `cooldown_s`. The failure is already recorded in the
+    manifest and the next run will retry it, so waiting costs nothing except
+    time — whereas not waiting means the next product meets the same refusal.
+    """
     for job in jobs:
         if stop.is_set():
             break
@@ -562,6 +591,10 @@ def downloader(jobs: Sequence[Job], raw_dir: Path, q: "queue.Queue",
             q.put((job, paths, secs, None))
         except Exception as exc:                  # noqa: BLE001
             q.put((job, None, 0.0, exc))
+            if cooldown_s > 0 and job is not jobs[-1]:
+                print(f"    pausing {cooldown_s / 60:.0f} min before the next "
+                      f"product", file=sys.stderr)
+                stop.wait(cooldown_s)             # interruptible by Ctrl-C
     q.put(None)                                   # sentinel
 
 
@@ -596,6 +629,11 @@ def main(argv=None) -> int:
     p.add_argument("--threads", type=int, default=4)
     p.add_argument("--keep-raw", action="store_true", help="do not delete inputs")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--cooldown", type=float, default=THROTTLE_COOLDOWN_S,
+                   metavar="SECONDS",
+                   help="pause after a product is given up on, so one refusal "
+                        "from the archive does not cascade into a run of them "
+                        f"(default {THROTTLE_COOLDOWN_S:.0f}; 0 disables)")
     args = p.parse_args(argv)
 
     months = None if args.all_months else tuple(args.months)
@@ -659,7 +697,8 @@ def main(argv=None) -> int:
     cdse = Cdse()
     q: "queue.Queue" = queue.Queue(maxsize=PREFETCH)
     stop = threading.Event()
-    t = threading.Thread(target=downloader, args=(todo, args.raw, q, cdse, stop),
+    t = threading.Thread(target=downloader,
+                         args=(todo, args.raw, q, cdse, stop, args.cooldown),
                          daemon=True)
     t.start()
 
