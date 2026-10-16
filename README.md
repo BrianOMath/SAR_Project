@@ -81,14 +81,26 @@ grassland-versus-forest on a thirtieth of the pixels.
 | | |
 |:--|:--|
 | [`TECHNICAL_REPORT.md`](TECHNICAL_REPORT.md) | The write-up — methods, results, the falsification, superseded claims |
-| [`PREREGISTRATION_2018.md`](PREREGISTRATION_2018.md) | Hypothesis and decision rule, committed before the data existed |
-| [Amendment 1](PREREGISTRATION_2018_AMENDMENT_1.md) · [Amendment 2](PREREGISTRATION_2018_AMENDMENT_2.md) | Two dated changes, both made while blind, each stating what would overturn it |
+| [`prereg/PREREGISTRATION_2018.md`](prereg/PREREGISTRATION_2018.md) | Hypothesis and decision rule, committed before the data existed |
+| [Amendment 1](prereg/PREREGISTRATION_2018_AMENDMENT_1.md) · [Amendment 2](prereg/PREREGISTRATION_2018_AMENDMENT_2.md) | Two dated changes, both made while blind, each stating what would overturn it |
 | [`METHODS_LOG.md`](METHODS_LOG.md) | Why the method changed nine times, with every superseded result preserved |
-| [`PROJECT_PLAN.md`](PROJECT_PLAN.md) | Requirements, frozen configuration, risk register, 18-entry nonconformance log |
+| [`PROJECT_PLAN.md`](PROJECT_PLAN.md) | Requirements, frozen configuration, risk register, 19-entry nonconformance log |
 
 **The pre-registration's value is in the commit history.** Every decision in the
 confirmatory test is dated earlier than the data that answered it, and anyone
 who clones this repository can check that.
+
+The three pre-registration files are deliberately **not merged into one**.
+Each was committed once, on a different date, and none has been modified since
+— `git log --diff-filter=A -- prereg/` shows 12, 13 and 15 October, and
+`git log -p --follow` shows the only later commit touching them is an empty
+rename. Merging them would produce a single file with a single recent commit,
+reading as though it had been written in one sitting, which is exactly the
+artefact pre-registration exists to rule out. Amendment 1 *withdrew* a
+prediction and Amendment 2 *declares that an aggregate was seen and nothing
+changed after* — neither statement means anything except as a separate dated
+document. This is the one place in the repository where the file boundaries
+are load-bearing evidence rather than organisation.
 
 ## Reproducing from a clean clone
 

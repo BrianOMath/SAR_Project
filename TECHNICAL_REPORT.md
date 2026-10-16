@@ -332,7 +332,7 @@ downloaded, and committed to a public repository:
 
 | document | date | content |
 |:--|:--|:--|
-| `PREREGISTRATION_2018.md` | 12 Oct | hypothesis, baseline membership rule, decision thresholds, meaning of each outcome, commitment to report either |
+| `prereg/PREREGISTRATION_2018.md` | 12 Oct | hypothesis, baseline membership rule, decision thresholds, meaning of each outcome, commitment to report either |
 | Amendment 1 | 13 Oct | fit range = window ∩ senescence limb; effect-size prediction withdrawn; level test promoted to co-primary |
 | Amendment 2 | 15 Oct | IPF observation recorded; no test changed; overturning condition stated |
 
@@ -761,7 +761,7 @@ or on reasoning, not on physics.
 | Meteorology and window freeze | `S1_Recon/fetch_met.py` |
 | Land cover | `S1_Recon/fetch_landcover.py` |
 | Stratified analysis | `S1_Recon/stratify.py` |
-| Pre-registration | `PREREGISTRATION_2018.md` + Amendments 1, 2 |
+| Pre-registration | `prereg/` — pre-registration + Amendments 1, 2 |
 | Methods log | `METHODS_LOG.md` |
 | Plan and nonconformance log | `PROJECT_PLAN.md` |
 | Results | `results/phase0/` … `phase4/` |
