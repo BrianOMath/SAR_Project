@@ -171,7 +171,7 @@ flowchart TD
     STACK --> STRAT["stratify.py<br><i>difference-in-differences vs a<br>9-year baseline distribution</i>"]
     CLASSES --> STRAT
     WIN --> STRAT
-    PREREG[/"PREREGISTRATION_2018.md<br>committed before the data"/] -.->|"fixes the decision rule"| STRAT
+    PREREG[/"prereg/<br>committed before the data,<br>never modified since"/] -.->|"fixes the decision rule"| STRAT
     REQ09 -.->|"cancels in a<br>same-image contrast"| STRAT
 
     STRAT --> RESULTS[("did_results · strata_series")]
