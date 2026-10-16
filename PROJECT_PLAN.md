@@ -1,11 +1,15 @@
 # SAR-Bog: Radar signatures of the 2026 Irish drought
 
 **Project plan — Tier A (minimum viable scope)**
-Brian Ó Mathúna · drafted 7 September 2026 · rev. 4, 26 September 2026
-**Phase 0 complete. Phase 1 complete: pipeline verified end to end, cross-calibration measured, REQ-09 closed (§5). Batch pending graph v3 reprocess (NCR-12).**
+Brian Ó Mathúna · drafted 7 September 2026 · **rev. 6, 16 October 2026**
+**All phases complete except §11 phase 6 (verification, Q1–Q2 2027). 316 acquisitions over eleven seasons processed and analysed; both pre-registered drought tests refuted; nineteen nonconformances logged.**
 
-Working title for the repo and report:
-*Sentinel-1 backscatter anomaly and post-drought recovery over the Carlow tillage belt, summer 2026*
+This document is the **requirements and assurance record**. What was measured and what it means is in `TECHNICAL_REPORT.md`; how the method changed and why is in `METHODS_LOG.md`. Where they overlap, those two are authoritative on results and this one on requirements — a fact stated in two places goes stale in one of them, and §15 below is the history of that happening.
+
+Final title, as delivered:
+*Detection limits of Sentinel-1 cross-ratio for drought monitoring over Irish farmland*
+
+> **Rev. 6 note.** Rev. 4 described a three-season study of 82 scenes testing whether the 2026 drought was visible. The scope doubled twice — to eleven seasons and 316 acquisitions, and from one treatment year to two — and the answer came back negative. Sections 5, 7, 11, 12, 14, 15 and 16 are revised accordingly. Sections 1–4, 6, 8–10 and 13 stand as written: the question, the requirements philosophy and the method survived the result, which is the point of having written them down first.
 
 ---
 
@@ -76,6 +80,8 @@ That converts "guess at crop yields" — which would not survive scrutiny — in
 ## 5. Data configuration and measured performance (locked)
 
 Phase 0 ran on 7–8 September 2026 (`s1_recon.py`, CDSE OData catalogue): 499 products over the AOI for April–October of 2024, 2025 and 2026, merged to 415 acquisitions across five relative orbits.
+
+> **Superseded in scope, not in conclusion (rev. 6).** The configuration below was selected on three seasons and then applied unchanged to eleven. The catalogue was re-run across 2016–2026 in October: relative orbit 1 ascending holds minimum coverage **1.000** over the whole eleven years (orbits 74 and 103 reach 0.323 and 0.178), so no orbit decision changed and no re-selection was possible. **316 acquisitions** were processed — 195 single-slice and 121 assembled from two GRD slices (§15, NCR-17) — all on one shared 10 m lattice. Every measured figure in this section stands; the sample it was measured on is four times larger. See `TECHNICAL_REPORT.md` §2.3.
 
 ### Selected configuration
 
@@ -265,7 +271,11 @@ Written in the same style as the B-Raspi requirements set. Verification methods:
 | REQ-14 | One forward prediction shall be recorded in the repository, with its verification criterion and verification date, and committed before the corresponding outcome data is published. | I |
 | REQ-15 | The project shall produce a technical report structured as abstract, methods, results, discussion, with every figure reproducible from the committed code and data manifest. | D |
 | REQ-16 | Raw Sentinel-1 products shall not be committed to the repository; a manifest of product identifiers sufficient to re-download them shall be committed instead. | I |
-| REQ-17 | Any acquisition arriving as more than one GRD slice shall be mosaicked before subsetting. Any acquisition whose slices are non-contiguous shall be excluded from the time series and the exclusion recorded. | T |
+| ~~REQ-17~~ | ~~Any acquisition arriving as more than one GRD slice shall be mosaicked before subsetting. Any acquisition whose slices are non-contiguous shall be excluded from the time series and the exclusion recorded.~~ **Superseded at rev. 5 — see REQ-17a. As written it excluded every acquisition in 2018, 2019 and 2020, which is the entire confirmatory test (NCR-17).** | T |
+| REQ-17a | Any acquisition arriving as more than one GRD slice shall be assembled in slant-range geometry, before terrain correction, from slices verified to share a platform, an absolute orbit and a datatake and to be contiguous in time. Assembly shall be accepted only against per-slice processing of the same acquisition, within the bound REQ-09 measured. An acquisition whose slices fail any of those checks shall be excluded and the exclusion recorded. | T |
+| REQ-20 | Any analysis window shall be derived from data independent of the SAR, written to the repository with its rule and a timestamp, and frozen before any SAR test reads it. | T |
+| REQ-21 | Processor (IPF) baseline shall be recorded per scene, and slices assembled into one acquisition shall share a baseline unless an override is given explicitly. | T |
+| REQ-22 | A treatment year shall be judged against the **prediction** interval of a random-effects distribution fitted to the baseline years, not a confidence interval and not a single reference year. Leave-one-out calibration shall be reported alongside. | A |
 | REQ-18 | Coverage, gap and completeness metrics shall be computed per acquisition (slices merged) and on calendar dates, never per product or on elapsed timedeltas. Spatial checks shall test the AOI against the valid-data mask, not the raster bounding box. | T |
 | REQ-19 | The incidence-angle distribution shall be computed per land-cover class. If the grassland and arable distributions differ materially, class comparisons shall be made within matched incidence bands rather than pooled, and the decision recorded. | A |
 
@@ -383,10 +393,10 @@ Part-time, evenings and weekends. Roughly four weeks to the report, plus a verif
 |:----------------------------------|:--------------------------------------------------------------------------------------------------|
 | **0. Reconnaissance** — ✅ *complete, 8 Sept 2026* | CDSE registered; `s1_recon.py` written, tested (52 tests, CI green) and run; 499 products catalogued across 2024–26; orbit 1 ascending selected; baseline year settled. Carried into phase 1: download the National Land Cover Map and the Met Éireann Oak Park series. See §5 and §15. |
 | **1. Pipeline** — *part done, 9–10 Sept* | Done: SNAP graph built, corrected and verified on one scene; `verify_scene.py` written; incidence angle measured (37.67° at Oak Park, S1D). Remaining: run the four cross-calibration scenes (§5), wrap the graph in a download → process → delete-raw batch runner, containerise, extend pytest and CI to the processing layer. |
-| **2. Bulk processing** — *one evening* | Run the full scene list: 82 scenes, ~66 min of compute, ~145 GB of download. Bandwidth-bound, not compute-bound. Monitor, handle failures, log. Unattended — this is where the headless design pays for itself. |
-| **3. Analysis** — *~6 days* | Extract per-class time series, compute the derived observables, test H1–H4, produce figures, run the inter-platform consistency check, and check the per-class incidence distributions (REQ-19). |
-| **4. Prediction** — *~1 day* | Derive the recovery index, write and commit `PREDICTION.md`. |
-| **5. Report and polish** — *~5 days* | Write the technical report, complete the verification matrix, tidy the repo and README. |
+| **2. Bulk processing** — ✅ *complete, 13–15 Oct 2026* | Ran to **316 acquisitions over eleven seasons**, not the 82 planned: 35 h wall-clock, zero failures outstanding. Two operational faults, both diagnosed from a failure signature rather than an error message — a silent overnight kill, and CDSE throttling misread as a network fault. The manifest-as-state design meant neither cost a scene. `METHODS_LOG.md`, 14 Oct. |
+| **3. Analysis** — ✅ *complete, 15 Oct 2026* | Per-class series, derived observables, pre-registered tests on **two** treatment years, inter-platform consistency, per-class incidence. Result: both refuted. |
+| **4. Prediction** — ⚠️ *not delivered as specified* | `PREDICTION.md` was never written, because the analysis it depended on produced a null: the recovery signal is below the method's detection limit, so a dated quantitative prediction from it would have been a number with no support. The pre-registered CSO check (phase 6) stands and is the honest residue of this phase. Recorded rather than quietly dropped. |
+| **5. Report and polish** — ✅ *complete, 15–16 Oct 2026* | `TECHNICAL_REPORT.md` rev. 2, README, methods log, pre-registration plus two amendments, verification matrix, repository finalised. |
 | **6. Verification** *(later)* — *Q1–Q2 2027* | When Teagasc's fodder survey and the CSO crop figures publish, verify the prediction and commit an addendum — whether it was right or wrong. |
 
 **Do not skip phase 6.** It is what makes the prediction real, and it is the sentence that will actually get discussed at interview.
@@ -405,9 +415,10 @@ Part-time, evenings and weekends. Roughly four weeks to the report, plus a verif
 | **R6** (H/L) — Wet-canopy or rainfall-contaminated acquisitions distort individual dates | REQ-12 flagging; exclude or discuss, do not silently drop |
 | **R7** (M/L) — Drought signal is not separable from normal senescence over arable | This is H2. If it fails it becomes the discussion, not a project failure. |
 | **R8** (H/M) — Scope creep into Tier B or C mid-project | Requirements are frozen at the start of phase 1. Anything else goes in a "future work" section. |
-| **R10** (H/M, raised) — Tooling defects produce plausible wrong numbers rather than errors | **Seven** such defects now found across phases 0 and 1 (§15) — this is the dominant failure mode of the project, not an occasional one. Every metric that drives a decision gets a test that pins it; exception handlers are narrowed so coding errors fail loudly; and no output is trusted because it ran without raising. |
+| **R10** (H/M, **realised**) — Tooling defects produce plausible wrong numbers rather than errors | **Nineteen** nonconformances across all phases (§15), of which the single largest family is a correct calculation presented wrongly. This was the dominant failure mode of the project, as forecast, and one instance (NCR-18) reached the published result before being caught. Every metric that drives a decision gets a test that pins it; exception handlers are narrowed so coding errors fail loudly; and no output is trusted because it ran without raising. |
 | **R11** (M/M) — Incidence-angle gradient across the AOI is confounded with land cover | Measured: 10.45° spread, ~1.6 dB. Cancels between dates on one orbit but not necessarily between classes. REQ-19 tests the per-class distributions before any class comparison is reported. |
-| **R9** (M/L) — Prediction turns out wrong | Publish it anyway, with the analysis of why. A verified-and-wrong prediction, honestly reported, is worth more than a vague claim that was never testable. |
+| **R9** (M/L, **realised in a form not anticipated**) — Prediction turns out wrong | The risk was written for a prediction that proved wrong. What happened instead is that the *hypothesis* was refuted before any prediction could be made, on both pre-registered treatment years. The mitigation held: `PREREGISTRATION_2018.md` committed in writing, before the data existed, that either outcome would be reported with equal prominence, and it was. The residual risk this register missed is the one that bit — **R12** below. |
+| **R12** (H/M, **realised — raised at rev. 6, in hindsight**) — A baseline too short to estimate between-year variance returns zero variance, and zero is read as precision | Not foreseen. Five baseline years gave τ = 0.000, which was quoted as evidence of pipeline stability and used to argue against collecting more years. Nine years give τ = 0.169 and overturn the result. Mitigation, for any future short-record design: **treat a between-year variance estimate of zero as a diagnostic that k is too small, never as a finding**, and fix the minimum k before looking at the data. See §15 NCR-18. |
 
 Likelihood / impact shown as L/I, each H, M or L.
 
@@ -436,13 +447,19 @@ If completed to plan, this project supports the following additions to the exper
 - **§9, Competency map** — upgrades *Remote sensing* from coursework to applied work, and adds a third instance to *Simulation & modelling* under the predicted-versus-measured pattern.
 - **§10, Gaps** — closes the SAR / radar gap properly. Reduces it from "coursework only" to "one applied project, publicly verifiable".
 
-The single sentence this project is being built to earn: *"I processed three seasons of Sentinel-1 over the 2026 Irish drought through a pipeline I built, made a dated prediction from the recovery signal, and published whether it was right."*
+> **Superseded at rev. 6.** The experience-bank entries were written and are maintained in `claude/Experience_Bank_SAR_Project_Additions.md`, which carries the delivered scope, the numbers, and the transferable lessons. This section is kept for the record of what was intended.
+
+The sentence this project was built to earn was: *"I processed three seasons of Sentinel-1 over the 2026 Irish drought through a pipeline I built, made a dated prediction from the recovery signal, and published whether it was right."*
+
+The sentence it actually earned is better, and is not the one that was planned for: *"I pre-registered a drought-detection hypothesis, built an eleven-year Sentinel-1 record to test it, found that my own earlier positive result came from a baseline too short to estimate its own variance, and published the refutation."* The project also became a **data-engineering** piece as much as a remote-sensing one — a resumable 316-scene batch with verification gates, catalogue de-duplication, rate-limit engineering and schema integrity checks that fail closed — which is how it is now framed.
 
 ---
 
 ## 15. Nonconformance log
 
-Kept because a verification record with real entries and root causes is worth more than an empty one. All four were found by running the tool against real catalogue data, not by inspection.
+Kept because a verification record with real entries and root causes is worth more than an empty one. **Nineteen entries.** Almost all were found by running a tool against real data, not by inspection — which is the finding, not an aside.
+
+NCR-01 to NCR-13 are recorded in full below. **NCR-14 to NCR-19 are summarised in the table that follows them and narrated in `METHODS_LOG.md`**, which is authoritative for those six: writing them out twice is what produced the stale claims this revision exists to correct.
 
 **NCR-01 — Coverage judged per product instead of per acquisition.**
 *Observed:* the first phase 0 run reported "no fully viable orbit"; every candidate failed on minimum coverage, orbit 1 at 0.017.
@@ -519,7 +536,22 @@ Kept because a verification record with real entries and root causes is worth mo
 *Fix:* flag only a spread that is both large **and** monotonic; print the pixel count beside each bin so a thin tail is visible as thin.
 *Class:* a verification tool raising a false alarm is not harmless. It spends the attention that a real alarm needs, and a tool that cries wolf gets ignored exactly when it should not be.
 
-**Process note.** Thirteen nonconformances, and **not one is an algorithm.** The SAR processing has been correct since the first scene. Four root causes recur:
+### NCR-14 to NCR-19 — summary
+
+Full narratives in `METHODS_LOG.md` at the dates given.
+
+| ID | Date | Summary | Family | Consequence |
+|:------|:--------|:------------------------------------------------------------|:---------|:-----------------------------------------|
+| NCR-14 | 13 Oct | The ratio prediction compared slopes fitted over windows of different length (72 vs 58 days), making the ratio partly an artefact of window width. | method | Prediction withdrawn; Amendment 1. |
+| NCR-15 | 13 Oct | A path typo reported as a permissions problem. | diagnostic | Operator sent after the wrong cause. |
+| NCR-16 | 13 Oct | A count printed under a label describing a different count. | presentation | Misread scene totals. |
+| NCR-17 | 13 Oct | REQ-17 excluded every multi-slice acquisition, which removed all of 2018, 2019 and 2020 — the entire confirmatory test. Correct when written, wrong once the scope grew. | requirement | REQ-17a; slice assembly built and accepted. |
+| NCR-18 | 15 Oct | τ = 0.000 from five baseline years was a truncated DerSimonian–Laird estimate read as pipeline stability, and was then used to argue against adding years. | method | **The published 2026 result did not survive nine baselines.** |
+| NCR-19 | 16 Oct | `figures.py` hardcoded the five-year baseline with no override, so figures built from the eleven-year series silently showed the superseded one under a confident caption. | presentation | Caught before publication; years made arguments. |
+
+**Process note (rev. 6).** Nineteen nonconformances, and **not one is an algorithm.** The SAR processing has been correct since the first scene. Two families account for most of them — a correct computation presented wrongly, and a statistic interpreted as something it is not — and the second is the dangerous one: NCR-14 and NCR-18 are both correct arithmetic given the wrong meaning, and NCR-18 is the only defect in the project that reached a published conclusion. **A test suite cannot catch a number that is right and means something else.** What caught NCR-18 was collecting the data the project had argued was not worth collecting.
+
+Four root causes recur:
 
 *(a) Batched string replacements applied without asserting each one matched* — NCR-02, NCR-03. Every subsequent edit asserts its match count before applying.
 
@@ -537,8 +569,8 @@ The pattern worth carrying forward: **the failure mode of this project is not ge
 
 1. **Do relative orbit numbers over Ireland survive the June 2026 reconfiguration, and is there a single orbit with continuous coverage across 2024–2026?** Yes to both. Orbit 1 ascending has fully-covering acquisitions in all three seasons. *(R1 closed.)*
 2. **From what date is Sentinel-1C available over Ireland, and does it overlap S1A enough to cross-calibrate directly?** S1C appears on orbit 1 from 4 April 2025 and runs alternating with S1A on a 6-day offset until S1A's last pass on 28 June 2026. S1D joins 24 April 2026. The overlap is ample — direct inter-platform comparison inside ≤14-day windows is possible throughout, which is why REQ-09 was rewritten.
-3. **Does Met Éireann's soil moisture deficit series for Oak Park cover 2024–2026 continuously, and at which drainage classes?** Still open — carried into phase 1. Met Éireann publishes daily SMD for three soil drainage classes at synoptic stations; continuity for station 375 needs checking on download.
-4. **Is the National Land Cover Map arable class fine-grained enough to give ≥1000 pixels per class per date after buffering?** Still open — carried into phase 1, resolved when the map is downloaded and clipped to the AOI. Note the AOI holds 16 million 10 m pixels, so the 1000-pixel floor is unlikely to bind; the real question is now whether the two classes span the same incidence-angle range (REQ-19).
+3. **Does Met Éireann's soil moisture deficit series for Oak Park cover 2024–2026 continuously, and at which drainage classes?** **Closed.** Station 375 is continuous across 2016–2026 for all three drainage classes. The moderately drained series is the one used, and it supplied both frozen drought windows under REQ-20 — 2026 and, under the same unmodified rule, 2018. It also supplied the deficit-day ranking that selected the two treatment years.
+4. **Is the National Land Cover Map arable class fine-grained enough to give ≥1000 pixels per class per date after buffering?** **Closed, comfortably.** After erosion the strata hold 3.86 M (grassland), 3.00 M (tillage), 0.52 M (forest), 0.049 M (dry grassland) and 0.106 M (wet grassland) pixels — the 1000-pixel floor never bound. The operative constraint turned out to be the opposite of the one anticipated: the smallest stratum, dry − wet grassland at 0.155 M pixels, is the **most** precise contrast in the study, because a control works by being similar rather than by being large (`TECHNICAL_REPORT.md` §6.3). Sample size was never the limit; between-year variance was.
 5. **Ascending or descending, and does overpass time matter for dew?** Settled: ascending, orbit 1, ~19:15 local. The descending candidates pass at ~07:40 local, which is peak dew on Irish grassland in summer and biases backscatter in the same direction as the drought signal. See §5.
 
-Two of five remain, both about ancillary data rather than the SAR configuration. Neither blocks the cross-calibration run or the bulk batch; both must close before phase 3 analysis.
+**All five are closed.** The two that were open at rev. 4 closed during phase 3, both in the direction that made the analysis easier — and neither was where the project actually failed. The question that mattered was not on this list, because nobody had thought to ask it: *how many baseline years does it take before a between-year variance estimate means anything?* See §12 R12.

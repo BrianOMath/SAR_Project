@@ -15,8 +15,12 @@ constants are copied across.
 
 Usage
 -----
-    python figures.py --strata ../results/phase3/strata_series.csv \\
+    python figures.py --strata ../results/phase3/strata_series_window.csv \\
         --series ../results/phase2/series.csv --out ../results/figures
+
+Note the series file. `strata_series.csv` is a superseded 156-acquisition,
+2021-2026 artefact; `strata_series_window.csv` is the current 316-acquisition,
+2016-2026 series. The suffix names the run that produced it, not a truncation.
 """
 
 from __future__ import annotations
@@ -45,8 +49,17 @@ MUTED = "#a9a7a0"
 BAND = "#dedcd4"
 SURFACE = "#fcfcfb"
 
+# Set from the command line by main(). The defaults are the pre-registered
+# nine-year baseline, not the five years the first result was built on: a
+# figure script that silently disagrees with the report is worse than one that
+# refuses to run. See NCR-19.
 TREAT = 2026
-BASE = [2021, 2022, 2023, 2024, 2025]
+# 2018 is absent by design. The drought rule named 2018 and 2026 as the two
+# treatment years, so 2018 is a second subject, not a baseline -- pooling it
+# into the distribution 2026 is judged against would put part of the effect
+# into the comparison. Nine years, df = 8, as pre-registered.
+BASE = [2016, 2017, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+REF = 2025        # the single year fig 4 pairs against, for a like-for-like SE
 LABELS = {"grassland_minus_forest": "grassland − forest",
           "tillage_minus_forest": "tillage − forest",
           "dry_grass_minus_wet_grass": "dry − wet grassland"}
@@ -203,7 +216,13 @@ def fig_slopes(rows, out: Path):
                      loc="upper left", bbox_to_anchor=(0.008, 0.945))
     for t in leg.get_texts():
         t.set_color(INK_2)
-    fig.suptitle("2026 against the five-year baseline distribution",
+    # Name the fit range. These panels fit the full senescence limb, which is
+    # the report's SECONDARY test; the primary is fitted inside each year's own
+    # drought window and gives a different p. A figure that reports one number
+    # and a report that reports another, with nothing saying which is which, is
+    # how a reader concludes one of them is wrong.
+    fig.suptitle(f"{TREAT} against the {len(BASE)}-year baseline distribution"
+                 f"   ·   full senescence limb, DOY {PEAK_DOY}-{END_DOY}",
                  color=INK, fontsize=12.5, x=0.008, ha="left", y=0.985,
                  fontweight="semibold")
     fig.tight_layout(rect=(0, 0, 1, 0.87))
@@ -258,7 +277,8 @@ def fig_detection(rows, out: Path):
     ax.set_xlim(0, 150)
     ax.set_xticks([0, 25, 50, 75, 100, 125, 150])
     ax.set_xticklabels(["0", "25", "50", "75", "100%", "125", "150"])
-    style(ax, "2026 effect as a percentage of the smallest change this design can resolve",
+    style(ax, f"{TREAT} effect as a percentage of the smallest change this "
+              f"design can resolve",
           "", "No contrast reached the threshold for detection")
     ax.grid(axis="y", visible=False)
     fig.tight_layout()
@@ -277,7 +297,7 @@ def fig_precision(rows, series_rows, out: Path):
     entries = []
     if series_rows:
         s26 = slope_per_month(*limb(series_rows, TREAT, "cross_ratio_db"))
-        s25 = slope_per_month(*limb(series_rows, 2025, "cross_ratio_db"))
+        s25 = slope_per_month(*limb(series_rows, REF, "cross_ratio_db"))
         if np.isfinite(s26["se"]):
             entries.append(("whole-AOI aggregate",
                             float(np.hypot(s26["se"], s25["se"])),
@@ -288,7 +308,7 @@ def fig_precision(rows, series_rows, out: Path):
     for a, b in CONTRASTS:
         key = f"{a}_minus_{b}"
         f26 = slope_per_month(*limb(rows, TREAT, key))
-        f25 = slope_per_month(*limb(rows, 2025, key))
+        f25 = slope_per_month(*limb(rows, REF, key))
         entries.append((LABELS[key], float(np.hypot(f26["se"], f25["se"])),
                         px[key]))
 
@@ -314,17 +334,48 @@ def fig_precision(rows, series_rows, out: Path):
 
 
 def main(argv=None) -> int:
+    # Module-level because four plotting functions read them and threading the
+    # pair through every signature would be noise. Declared here, before the
+    # defaults below read them, because Python rejects a global declaration
+    # that follows a use of the name in the same function.
+    global TREAT, BASE, REF
+
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--strata", type=Path, required=True)
     p.add_argument("--series", type=Path)
     p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--treat-year", type=int, default=TREAT,
+                   help="the year under test (default: %(default)s)")
+    p.add_argument("--base-years", type=int, nargs="+", default=BASE,
+                   help="baseline years the treatment year is judged against "
+                        "(default: the nine pre-registered years)")
     args = p.parse_args(argv)
+
+    TREAT = args.treat_year
+    BASE = [y for y in sorted(set(args.base_years)) if y != TREAT]
+    if not BASE:
+        raise SystemExit("no baseline years left after removing the treatment year")
+    REF = BASE[-1]
 
     args.out.mkdir(parents=True, exist_ok=True)
     rows = read_rows(args.strata)
     series_rows = read_rows(args.series) if args.series and args.series.exists() else []
+
+    have = {r["year"] for r in rows}
+    missing = [y for y in BASE if y not in have]
+    if missing:
+        # Silently dropping a baseline year is how a nine-year figure becomes a
+        # five-year figure without saying so.
+        raise SystemExit(
+            f"{args.strata} has no rows for baseline year(s) "
+            f"{', '.join(map(str, missing))} -- it holds {min(have)}-{max(have)}. "
+            f"Pass --base-years to match the series, or use the series the "
+            f"report was computed from.")
     print(f"{len(rows)} acquisitions from {args.strata}")
+    span = (f"{BASE[0]}-{BASE[-1]}" if BASE == list(range(BASE[0], BASE[-1] + 1))
+            else ", ".join(map(str, BASE)))
+    print(f"treatment {TREAT}; baseline {span} ({len(BASE)} years)")
 
     made = [
         fig_seasonal(rows, "grassland_minus_forest", args.out / "fig1_seasonal.png"),

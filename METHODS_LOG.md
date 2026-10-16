@@ -312,7 +312,11 @@ of three.
 
 **Status: a specific, well-calibrated, physically coherent hypothesis. Not an
 established finding.** It requires confirmation on data that did not generate
-it. See `REMAINING_WORK.md`.
+it.
+
+*Written 12 October. The confirmation ran on 15 October and refuted it — see
+below. This paragraph is left exactly as it stood, because a record of what was
+believed before the test is worth more than a tidy one written after.*
 
 ---
 
@@ -485,3 +489,273 @@ tested, and at 0.0011 dB it does not warrant testing.
 - 2018 is 34 assembled acquisitions out of 35 — more heavily assembled than any
   baseline year except 2019 and 2020. Recorded as a known asymmetry in
   Amendment 1 to the pre-registration.
+
+---
+
+## 14 October 2026 — the batch, and two operational failures
+
+Neither of these is a nonconformance against a requirement: nothing was
+measured wrongly and no result changed. They are recorded because both were
+diagnosed from a failure *signature* rather than from an error message, and
+that reasoning is the transferable part.
+
+### The run stopped at 06:30 with no error
+
+The batch was 35 hours of download-and-process and it stopped overnight,
+silently. There was no traceback, no non-zero exit, nothing in the log to say
+why.
+
+The diagnosis came from a mismatch between two files that should have been in
+step. `batch_process.py` appends to the manifest after a scene verifies, and
+writes its progress line to the log before starting the next one. The log was
+**one row behind** the manifest. A crash inside the processing of scene *n*
+leaves the log ahead — it has announced a scene the manifest never records. A
+process killed between the two writes leaves the log behind, which is what was
+there.
+
+So the process was terminated from outside, not broken from inside. `powercfg
+/requests` confirmed sleep was not the cause, and `powercfg -lastwake` and the
+standby timeouts were all zero. The machine had not slept; something had
+reaped the process. The manifest-as-state design meant this cost nothing —
+`already_done` counts only verified scenes, so the restart resumed at scene
+*n* and the 35-hour run completed with zero outstanding failures.
+
+The lesson is about the ordering of two writes, which was not designed for
+this and turned out to be a diagnostic. **Write progress before the work and
+state after it, and the gap between them tells you which end died.**
+
+### CDSE began refusing mid-run
+
+The visible failure was a `ConnectionResetError` (WinError 10054) followed by
+repeated `ConnectTimeoutError` against
+`catalogue.dataspace.copernicus.eu`, and two downloads lost outright.
+
+That reads as a network fault, and it is not. **A connect timeout is the TCP
+handshake not completing**, which is refusal, not slowness: a congested link
+drops packets mid-transfer, a host that will not talk to you fails before the
+transfer starts. The two signatures are distinguishable and they call for
+opposite responses — retry harder, or stand down.
+
+CDSE limits concurrent downloads per user and monthly transfer volume. This
+run used one sequential stream and was far inside both, so the cause was
+transient server-side refusal rather than an exhausted quota. Three things
+about the downloader were wrong for that:
+
+1. **The backoff gave up in 15 seconds** — three attempts, 5 s then 10 s.
+   Throttling clears on a scale of minutes, so the retry policy was sized for
+   a dropped packet and the fault was not a dropped packet.
+2. **One 120-second timeout covered both connect and read.** Each doomed
+   attempt spent two minutes discovering something a refused handshake
+   reports in seconds.
+3. **A failed job went straight to the next product.** Retrying into an
+   active throttle extends it, so one refusal cascaded into a run of
+   consecutive failures — which is why two were lost rather than one.
+
+The rebuilt policy separates the two phases and sizes each to its own failure
+mode: six attempts at 30 s doubling to 480 s (about fifteen minutes of
+patience), a 30-second connect timeout against a 300-second read timeout
+because a 1.7 GB product legitimately goes quiet between chunks, and a
+fifteen-minute cooldown after a product is abandoned. The five affected
+acquisitions were recovered on the next pass.
+
+Two properties of the original design are what made this survivable rather
+than fatal: a failed download costs nothing, because the manifest records the
+failure and the next run retries it; and the raw product is deleted only
+after the output verifies, so a failure never destroys its own input.
+
+---
+
+## 15 October 2026 — the confirmatory test, and NCR-18
+
+Both treatment years were tested against the nine-year baseline fixed on
+12 October and amended on 13 and 15 October. Both are refuted. The reason one
+of them ever looked significant is the most useful finding the project has
+produced.
+
+### 2018 — refuted on direction
+
+Grassland − forest, cross-ratio slope, DOY 182–253, against nine baselines:
+
+| | |
+|:--|:--|
+| baseline | −0.116 dB/month (between-year sd 0.043, k = 9) |
+| 95% prediction interval | [−0.395, +0.163] |
+| **2018** | **+0.047 ± 0.109**, z = **+1.35**, p = 0.215 |
+
+The pre-registered rule required 2018 to be *steeper* than baseline **and**
+z ≤ −2.306. It is flatter, and the sign is positive. The test fails on
+direction before significance is reached, so no power argument applies: the
+estimate sits on the wrong side of the baseline, not merely too close to it.
+
+The co-primary level test at DOY 227 disagrees — 2018 sits below baseline in
+all three contrasts (grassland − forest z = −2.53, tillage − forest z = −3.27,
+dry − wet z = −2.03) and the slopes are flatter in all three. Amendment 1 fixed
+in advance that a slope/level disagreement is itself the finding and is not
+resolved by preferring the more favourable. It is reported as a disagreement.
+
+Its calibration also fails: on grassland − forest the most extreme *baseline*
+year is 2017 at z = +3.37, further from the baseline than 2018.
+
+**A post-hoc hypothesis was raised and deliberately not pursued.** 2018's
+drought window opens on DOY 151 and the fit starts at 182, so 31 days of
+drought sit outside the fitted range, and "already low, now flat" is what you
+would see if senescence had happened before the fit began. That idea arrived
+after the result. Amendment 1 excluded DOY 151–181 for a stated reason, before
+the data existed, and refitting now would be fitting the test to the answer. If
+it is worth pursuing it must be pre-registered and tested on a year not yet
+used.
+
+### 2026 — the earlier result does not survive a wider baseline
+
+Same estimate, different comparator:
+
+| baseline set | k | pooled | τ | z | p | |
+|:--|---:|---:|---:|---:|---:|:--|
+| **9 years (pre-specified)** | 9 | −0.055 | 0.169 | −1.74 | 0.119 | inside |
+| 7, dropping 2016 + 2017 | 7 | −0.086 | 0.173 | −1.53 | 0.177 | inside |
+| 8, dropping 2020 | 8 | −0.141 | 0.058 | −2.71 | 0.030 | outside |
+| 5, the original 2021–2025 | 5 | −0.188 | 0.000 | −2.99 | 0.040 | outside |
+
+2026's slope is **−0.390 ± 0.060 in every row**. Nothing about the treatment
+year changed. The earlier z = −3.00, p = 0.0398 and this z = −1.75, p = 0.119
+are the same measurement against different baselines.
+
+**The whole result rests on one year.** 2020's grassland − forest slope is
+**+0.454 ± 0.112** where most years are negative. Including it raises the
+between-year sd from 0.058 to 0.169 and moves the pooled baseline from −0.141
+to −0.055; both changes put 2026 inside the interval. The original five-year
+baseline was 2021–2025, which excludes 2020. That omission is the entire
+difference between p = 0.04 and p = 0.12.
+
+### NCR-18 — τ = 0.000 was read as a strength and was a small-sample artefact
+
+**What was believed.** Zero between-year variance across five years was treated
+as evidence of pipeline stability and quoted as a headline figure.
+
+**What is true.** With k = 5, DerSimonian–Laird returns τ² = 0 whenever
+within-year sampling error accounts for the observed scatter. The prediction
+interval then collapses toward the treatment year's own standard error, and a
+tight interval produced by having too few years is indistinguishable from one
+produced by a stable measurement. τ = 0.000 from five years is a warning that
+the baseline is too small to estimate between-year variance, not a finding
+about the instrument.
+
+**The compounding error.** `REMAINING_WORK.md` listed more baseline years under
+*explicitly not worth doing*. Quoted in full, because the reasoning is the
+point and the file has since been retired:
+
+> **More baseline years for the 2026 full-limb test.** The variance
+> decomposition settles it: 82% of the uncertainty is 2026's own fit error and
+> 0% is between-year variation, so the detection threshold falls only from
+> 0.147 to 0.107 dB/month going from five baseline years to fifteen. T1 adds
+> years for a different reason — a second treatment year — not to sharpen 2026.
+
+That decomposition was computed from the same five years that produced the
+artefact: it reported 0% between-year variation because the estimator had
+truncated to zero, and was then used to argue that more years would not help.
+The argument was circular, and nine years break it — between-year sd is 0.169,
+three times 2026's own standard error. The same document also stated, under the
+same heading, that "the pipeline is validated at τ = 0.000 across five years
+and four platforms", which converts the artefact into a validation claim.
+
+The transferable form: **an argument for not collecting more data, built from a
+statistic that only the shortage of data produced.**
+
+**Classification.** A method error, the second in the project after NCR-14, and
+of the same family: a statistic computed correctly and interpreted as something
+it is not.
+
+### NCR-19 — the figure script was pinned to the superseded baseline
+
+Found on 16 October while closing out the repository, by re-running `figures.py`
+against the eleven-year series.
+
+*Observed:* the script read all 316 acquisitions, announced "316 acquisitions",
+and produced figures identical in every byte but one to the five-year run. Only
+the figure that plots raw points changed; the three that compute a baseline
+distribution did not.
+
+*Cause:* `TREAT = 2026` and `BASE = [2021…2025]` were module-level constants
+with no command-line override. The script silently used five of the eleven
+years it had been given, and captioned the result *"2026 against the five-year
+baseline distribution"*.
+
+*Why it matters more than it looks:* these figures are what a reader looks at
+first. Published as they stood, the report would have argued that a five-year
+baseline is an artefact while its own figures displayed one, confidently
+labelled, with nothing to indicate disagreement. Nobody comparing the two would
+have concluded the figures were stale; they would have concluded the analysis
+was inconsistent.
+
+*Fix:* `--treat-year` and `--base-years`, defaulting to the nine pre-registered
+baselines; every caption that stated a count now derives it from the data; and
+the script refuses to run when the series lacks a requested baseline year
+rather than quietly dropping it. The fig-2 caption now also names its fit range,
+because it fits the full senescence limb while the report's primary test fits
+each year's drought window, and the two give different p-values.
+
+*Classification:* family (b), correct computation presented wrongly — the eighth
+occurrence, and the first found after the analysis was believed finished.
+
+*A note on the fix.* The patch asserted each of its seven anchors matched
+exactly once and called `ast.parse` on the result, which is the discipline that
+had worked all project. It passed, and the file would not run: `global TREAT`
+placed after a use of `TREAT` in the same function is a `SyntaxError` raised by
+the compiler, not the parser. `ast.parse` builds a tree without resolving
+scope. The check is now `compile()`. This is the same shape as the graph-v4
+defect — well-formed XML, missing `<operator>` — where a structural check
+passed something semantically void. **A validator answers the question it was
+built to answer, and the useful question is usually one step further on.**
+
+### The single-baseline trap, fourth occurrence
+
+Identical 2026 data, grassland − forest: **p = 0.0153** against 2025 alone,
+**p = 0.119** against the nine-year distribution. Dry − wet: **p = 0.0029**
+against 2025 alone, null against nine years. Earlier occurrences: VH tillage
+(p = 0.046 → 0.20), the level difference-in-differences against 2025 alone, and
+the original 2026 window result.
+
+### Calibration failed in every primary cell
+
+Across both runs, twelve primary cells, each one reports a baseline year
+further from the baseline than the treatment year: 2020 at z = +4.50, 2017 at
+z = +3.37, 2021 at z = −2.39, 2022 at z = −2.28, 2016 at z = +1.74. The
+prediction intervals are not wide enough to call any year unusual. This is the
+clearest statement the project can make about its own sensitivity.
+
+### The awkward fact
+
+**2020 had 950 deficit-days — the third most severe drought in the 23-year
+record — and the shallowest grassland − forest slope in the series, in the
+wrong direction.** Either the measurement is too noisy at this precision for
+2020 to mean anything, in which case it is too noisy for 2026 to mean anything
+either, or the drought-to-slope relationship is not there. Neither reading
+supports the hypothesis.
+
+### What stands
+
+The detection-limit conclusion, and it is now far better supported. Nine
+baseline years put ordinary year-to-year variation in the grassland − forest
+cross-ratio slope at **±0.17 dB/month**, larger than any drought effect the
+record could evidence. The earlier version of this conclusion rested on a
+five-year baseline that understated that variation; it is now measured against
+eleven years and four satellites.
+
+Also standing: pipeline repeatability, inter-platform agreement (0.171 dB worst
+channel, 0.011 dB cross-ratio), slice-assembly agreement (0.0000 and
+−0.0011 dB against a 0.171 dB bound), one shared lattice across all 316 scenes,
+and a frozen-window discipline that held from first specification to final
+test.
+
+### What the project now reports
+
+Not "SAR cannot see drought in Irish grassland" — the measurement was never
+sensitive enough to support a claim that strong. The finding is narrower and
+transfers further: **a five-year baseline reporting zero between-year variance
+produced a result that nine years refute, and the zero was the tell.** Any
+difference-in-differences on a short environmental record is exposed to the
+same failure.
+
+The pre-registration committed in writing, before the data existed, that either
+outcome would be reported with equal prominence. This is the less satisfying
+outcome and the more useful one.
